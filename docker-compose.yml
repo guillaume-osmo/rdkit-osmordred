@@ -1,0 +1,11 @@
+version: '3'
+
+services:
+  rdkit:
+    build: .
+    volumes:
+      - .:/work
+    command: tail -f /dev/null
+    platform: linux/amd64
+    container_name: rdkit
+    shm_size: '12gb'

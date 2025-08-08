@@ -5,6 +5,17 @@ This module provides comprehensive tests for all Osmordred descriptor functions
 available through the Python wrapper.
 """
 
+import os
+os.environ["RDBASE"] = "/work"
+os.environ["PYTHONPATH"] = "/work/build"
+os.environ["LD_LIBRARY_PATH"] = "/work/build/lib"
+
+import unittest
+
+from rdkit import Chem
+from rdkit.Chem import rdOsmordred as Osmordred
+from rdkit.Chem.Osmordred import CalcOsmordred
+
 import unittest
 import numpy as np
 from rdkit import Chem
