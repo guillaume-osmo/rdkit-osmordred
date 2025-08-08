@@ -92,10 +92,10 @@ TEST_CASE("Osmordred Matrix Descriptors") {
     REQUIRE(!dist_descs_l.empty());
     
     // Test with different versions
-    auto dist_descs_v2 = calcDistMatrixDescs(*mol, 2);
+    auto dist_descs_v2 = calcDistMatrixDescs(*mol);
     REQUIRE(!dist_descs_v2.empty());
     
-    auto dist_descs_l_v2 = calcDistMatrixDescsL(*mol, 2);
+    auto dist_descs_l_v2 = calcDistMatrixDescsL(*mol);
     REQUIRE(!dist_descs_l_v2.empty());
   }
   
@@ -110,10 +110,10 @@ TEST_CASE("Osmordred Matrix Descriptors") {
     REQUIRE(!adj_descs_l.empty());
     
     // Test with different versions
-    auto adj_descs_v2 = calcAdjMatrixDescs(*mol, 2);
+    auto adj_descs_v2 = calcAdjMatrixDescs(*mol);
     REQUIRE(!adj_descs_v2.empty());
-    
-    auto adj_descs_l_v2 = calcAdjMatrixDescsL(*mol, 2);
+
+    auto adj_descs_l_v2 = calcAdjMatrixDescsL(*mol);
     REQUIRE(!adj_descs_l_v2.empty());
   }
   
@@ -149,7 +149,7 @@ TEST_CASE("Osmordred Carbon Types") {
     REQUIRE(!carbon_types.empty());
     
     // Test with different versions
-    auto carbon_types_v2 = calcCarbonTypes(*mol, 2);
+    auto carbon_types_v2 = calcCarbonTypes(*mol);
     REQUIRE(!carbon_types_v2.empty());
   }
 }
