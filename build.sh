@@ -32,13 +32,20 @@ cmake .. \
     -DRDK_TEST_MULTITHREADED=ON \
     -DRDK_BUILD_CFFI_LIB=ON \
     -DRDK_BUILD_OSMORDRED_SUPPORT=ON \
-    -DPYTHON_EXECUTABLE=$(which python) \
+    -DPYTHON_EXECUTABLE=/opt/conda/envs/rdkit_build/bin/python \
     -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
     -DCMAKE_C_COMPILER=/usr/bin/gcc \
     -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
-    -DRDK_USE_BOOST_SERIALIZATION=ON \
-    -DPYTHON3_NUMPY_INCLUDE_PATH=$(python -c "import numpy; print(numpy.get_include())") \
+    -DPYTHON3_NUMPY_INCLUDE_PATH=/opt/conda/envs/rdkit_build/lib/python3.11/site-packages/numpy/core/include \
     -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1"
 
 # Build
 make -j$(nproc)
+
+# Install
+make install
+
+# os.environ['RDBASE'] = '/work'
+# os.environ['RDK_BUILD'] = '/work/build'
+# os.environ['PYTHONPATH'] = f"{os.environ['RDBASE']}:{os.environ['RDK_BUILD']}{os.environ.get('PYTHONPATH', '')}"
+# os.environ['LD_LIBRARY_PATH'] = f"{os.environ['RDK_BUILD']}/lib:{os.environ.get('CONDA_PREFIX', '')}/lib:{os.environ.get('LD_LIBRARY_PATH', '')}"  # Linux
