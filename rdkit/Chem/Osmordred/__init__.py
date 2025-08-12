@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2023 Greg Landrum and other RDKit contributors
+# Copyright (c) 2025 Guillaume Godin
 #  All rights reserved.
 #
 #  This file is part of the RDKit.
@@ -27,7 +27,7 @@ except ImportError:
 import numpy as np
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from tqdm import tqdm
+#from tqdm import tqdm
 from typing import List, Optional, Tuple, Union
 import warnings
 
@@ -186,7 +186,7 @@ def Calculate(smiles_list: List[str], ids: Optional[List] = None, n_jobs: int = 
             for smi, mol_id in zip(smiles_list, ids)
         }
         
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing molecules"):
+        for future in as_completed(futures):
             smi, mol_id = futures[future]
             try:
                 result = future.result()
