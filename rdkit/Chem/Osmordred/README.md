@@ -45,7 +45,7 @@ Calculate Osmordred descriptors for a single SMILES string.
 **Example:**
 ```python
 # Get descriptors with names
-descriptors, names = Osmordred.CalcOsmordred("CCO", version=2, names=True)
+descriptors, names = Osmordred.CalcOsmordred("CCO", names=True)
 print(f"First descriptor: {names[0]} = {descriptors[0]}")
 
 # Get descriptors without names
