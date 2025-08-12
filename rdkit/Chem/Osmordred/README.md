@@ -18,24 +18,23 @@ from rdkit.Chem import Osmordred
 
 # Calculate descriptors for a single molecule
 smiles = "CCO"
-descriptors, names = Osmordred.CalcOsmordred(smiles, version=2, names=True)
+descriptors, names = Osmordred.CalcOsmordred(smiles, names=True)
 print(f"Got {len(descriptors)} descriptors")
 
 # Batch processing
 smiles_list = ["CCO", "c1ccccc1", "CC(C)CC1=CC=C(C=C1)C(C)C(=O)O"]
-results_df = Osmordred.Calculate(smiles_list, n_jobs=4, version=2)
+results_df = Osmordred.Calculate(smiles_list, n_jobs=4)
 print(f"Results shape: {results_df.shape}")
 ```
 
 ## Functions
 
-### `CalcOsmordred(smiles, version=2, names=False, mynames=None)`
+### `CalcOsmordred(smiles, names=False, mynames=None)`
 
 Calculate Osmordred descriptors for a single SMILES string.
 
 **Parameters:**
 - `smiles` (str): SMILES string of the molecule
-- `version` (int): Version of descriptors (1 or 2, default: 2)
 - `names` (bool): Whether to return descriptor names along with values
 - `mynames` (List[str], optional): Custom descriptor names list
 
@@ -50,11 +49,11 @@ descriptors, names = Osmordred.CalcOsmordred("CCO", version=2, names=True)
 print(f"First descriptor: {names[0]} = {descriptors[0]}")
 
 # Get descriptors without names
-descriptors = Osmordred.CalcOsmordred("CCO", version=2, names=False)
+descriptors = Osmordred.CalcOsmordred("CCO",  names=False)
 print(f"Number of descriptors: {len(descriptors)}")
 ```
 
-### `Calculate(smiles_list, ids=None, n_jobs=4, version=2, names=False, mynames=None)`
+### `Calculate(smiles_list, ids=None, n_jobs=4, names=False, mynames=None)`
 
 Compute molecular descriptors for a list of SMILES with parallel processing.
 
@@ -62,7 +61,6 @@ Compute molecular descriptors for a list of SMILES with parallel processing.
 - `smiles_list` (List[str]): List of SMILES strings
 - `ids` (List, optional): List of unique identifiers (same length as smiles_list)
 - `n_jobs` (int): Number of parallel processes (default: 4)
-- `version` (int): Version of descriptors (default: 2)
 - `names` (bool): Whether to include names
 - `mynames` (List[str], optional): Custom names list
 
@@ -78,18 +76,16 @@ results_df = Osmordred.Calculate(
     smiles_list=smiles_list,
     ids=ids,
     n_jobs=4,
-    version=2
 )
 print(results_df.head())
 ```
 
-### `CalcOsmordredFromMol(mol, version=2, names=False, mynames=None)`
+### `CalcOsmordredFromMol(mol, names=False, mynames=None)`
 
 Calculate Osmordred descriptors from an RDKit molecule object.
 
 **Parameters:**
 - `mol`: RDKit molecule object
-- `version` (int): Version of descriptors (1 or 2, default: 2)
 - `names` (bool): Whether to return descriptor names along with values
 - `mynames` (List[str], optional): Custom descriptor names list
 
@@ -100,33 +96,29 @@ Calculate Osmordred descriptors from an RDKit molecule object.
 **Example:**
 ```python
 mol = Chem.MolFromSmiles("c1ccccc1")
-descriptors = Osmordred.CalcOsmordredFromMol(mol, version=2)
+descriptors = Osmordred.CalcOsmordredFromMol(mol)
 print(f"Descriptors: {len(descriptors)}")
 ```
 
-### `GetDescriptorNames(version=2)`
+### `GetDescriptorNames()`
 
 Get the list of descriptor names for a given version.
-
-**Parameters:**
-- `version` (int): Version of descriptors (1 or 2, default: 2)
 
 **Returns:**
 - `List[str]`: List of descriptor names
 
 **Example:**
 ```python
-names = Osmordred.GetDescriptorNames(version=2)
-print(f"Version 2 has {len(names)} descriptors")
+names = Osmordred.GetDescriptorNames()
+print(f"Osmordred has {len(names)} descriptors")
 print(f"First 5: {names[:5]}")
 ```
 
 ## Version Differences
 
-- **Version 1**: Original Mordred descriptors (1,599 descriptors)
-- **Version 2**: Extended descriptors with additional features (3,585 descriptors)
+- **Current Version**: Extended descriptors with additional features (3,585 descriptors)
 
-Version 2 includes additional descriptors such as:
+Current Version includes additional descriptors such as:
 - Extended EState descriptors
 - Additional fragment descriptors
 - Enhanced information content calculations
@@ -138,7 +130,7 @@ The functions handle errors gracefully:
 
 ```python
 # Invalid SMILES returns None
-result = Osmordred.CalcOsmordred("invalid_smiles", version=2)
+result = Osmordred.CalcOsmordred("invalid_smiles")
 print(result)  # None
 
 # Functions that fail return NaN arrays
@@ -182,7 +174,7 @@ from rdkit import Chem
 from rdkit.Chem import Osmordred
 
 # Single molecule
-descriptors = Osmordred.CalcOsmordred("CCO", version=2)
+descriptors = Osmordred.CalcOsmordred("CCO")
 print(f"Ethanol has {len(descriptors)} descriptors")
 
 # Batch processing
@@ -247,14 +239,11 @@ If you get import errors, ensure:
 - Reduce batch size for memory-constrained systems
 - Monitor memory usage with large datasets
 
-### Version Compatibility
-- Version 1: 1,599 descriptors
-- Version 2: 3,585 descriptors
-- Use version 2 for maximum descriptor coverage
+### current Version 
+- current Version : 3,585 descriptors
 
 ## Contributing
 
 The Osmordred module is part of RDKit. For issues or contributions:
 1. Check the RDKit issue tracker
 2. Ensure Osmordred support is enabled in your build
-3. Test with both versions (1 and 2) of descriptors 
