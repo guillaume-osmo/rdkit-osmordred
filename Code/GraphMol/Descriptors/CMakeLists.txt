@@ -31,8 +31,13 @@ rdkit_library(Descriptors
               ${OSMORDRED_SOURCES}
               ${RDKIT217_SOURCES}
               LINK_LIBRARIES PartialCharges SmilesParse FileParsers Subgraphs SubstructMatch MolTransforms GraphMol
-                 EigenSolvers RDGeneral)
+                 EigenSolvers RDGeneral Fingerprints)
 target_compile_definitions(Descriptors PRIVATE RDKIT_DESCRIPTORS_BUILD)
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  target_compile_definitions(Descriptors PRIVATE RDK_BUILD_OSMORDRED_SUPPORT)
+  find_library(LAPACKE_LIB lapacke HINTS ${CMAKE_PREFIX_PATH}/lib)
+  target_link_libraries(Descriptors PUBLIC ${LAPACK_LIBRARIES} ${LAPACKE_LIB})
+endif()
 
 rdkit_headers(Crippen.h BCUT.h Lipinski.h
               MolDescriptors.h
@@ -87,6 +92,10 @@ LINK_LIBRARIES  Descriptors ForceFieldHelpers DistGeomHelpers  )
 endif(RDK_BUILD_DESCRIPTORS3D)
 
 rdkit_catch_test(descriptorsTestCatch catch_tests.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  rdkit_catch_test(testRDKit217 rdkit217/test_rdkit217.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+endif(RDK_BUILD_OSMORDRED_SUPPORT)
 
 if(RDK_BUILD_PYTHON_WRAPPERS)
 add_subdirectory(Wrap)
