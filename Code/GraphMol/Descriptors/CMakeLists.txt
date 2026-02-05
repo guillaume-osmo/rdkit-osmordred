@@ -5,6 +5,19 @@ if(RDK_BUILD_DESCRIPTORS3D)
 
 endif(RDK_BUILD_DESCRIPTORS3D)
 
+# Osmordred and RDKit217 descriptors
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  find_package(LAPACK REQUIRED)
+  include_directories(${LAPACK_INCLUDE_DIRS})
+  # Include rdkit217 folder for RDKit217 descriptors
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/rdkit217)
+  
+  set(OSMORDRED_HDRS Osmordred.h)
+  set(OSMORDRED_SOURCES Osmordred.cpp)
+  set(RDKIT217_HDRS rdkit217/RDKit217Descriptors.h)
+  set(RDKIT217_SOURCES rdkit217/RDKit217Descriptors.cpp)
+endif(RDK_BUILD_OSMORDRED_SUPPORT)
+
 
 rdkit_library(Descriptors
               Crippen.cpp BCUT.cpp MolDescriptors.cpp MolSurf.cpp Lipinski.cpp ConnectivityDescriptors.cpp
@@ -15,6 +28,8 @@ rdkit_library(Descriptors
               OxidationNumbers.cpp
               DCLV.cpp
               ${DESC3D_SOURCES}
+              ${OSMORDRED_SOURCES}
+              ${RDKIT217_SOURCES}
               LINK_LIBRARIES PartialCharges SmilesParse FileParsers Subgraphs SubstructMatch MolTransforms GraphMol
                  EigenSolvers RDGeneral)
 target_compile_definitions(Descriptors PRIVATE RDKIT_DESCRIPTORS_BUILD)
@@ -30,6 +45,8 @@ rdkit_headers(Crippen.h BCUT.h Lipinski.h
               OxidationNumbers.h
               DCLV.h
               ${DESC3D_HDRS}
+              ${OSMORDRED_HDRS}
+              ${RDKIT217_HDRS}
               DEST GraphMol/Descriptors)
 
 rdkit_test(testDescriptors test.cpp
