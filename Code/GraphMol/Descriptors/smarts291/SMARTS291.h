@@ -61,6 +61,27 @@ RDKIT_DESCRIPTORS_EXPORT std::vector<std::string> getGoldenFeatureNames(char par
 RDKIT_DESCRIPTORS_EXPORT std::vector<std::string> getSMARTS291FeatureNames(char param = 'A');
 
 }  // namespace SMARTS291
+
+// Legacy Osmordred namespace for compatibility
+namespace Osmordred {
+
+// Extract 241 base features using SMARTS patterns
+RDKIT_DESCRIPTORS_EXPORT std::vector<double> extractAbrahamBaseFeatures(const RDKit::ROMol& mol);
+
+// Generate 50 golden features (ratio features)
+RDKIT_DESCRIPTORS_EXPORT std::vector<double> generateGoldenFeaturesA(const std::vector<double>& baseFeatures);
+RDKIT_DESCRIPTORS_EXPORT std::vector<double> generateGoldenFeaturesS(const std::vector<double>& baseFeatures);
+RDKIT_DESCRIPTORS_EXPORT std::vector<double> generateGoldenFeaturesRidge(const std::vector<double>& baseFeatures);
+
+// Calculate 291 Abraham features (241 base + 50 golden for A model)
+RDKIT_DESCRIPTORS_EXPORT std::vector<double> calcAbrahamsFeatures(const RDKit::ROMol& mol);
+
+#ifdef HAVE_ABRAHAM_MODELS
+// Full Abraham parameter prediction (requires trained models)
+RDKIT_DESCRIPTORS_EXPORT std::vector<double> calcAbrahams(const RDKit::ROMol& mol);
+#endif
+
+}  // namespace Osmordred
 }  // namespace Descriptors
 }  // namespace RDKit
 

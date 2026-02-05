@@ -4,13 +4,13 @@
 // SMARTS291 - Abraham SMARTS-based Features Unit Tests
 // Tests C++ implementation against Python CalcAbrahamsFeatures golden reference
 
-#define CATCH_CONFIG_MAIN
-#include "catch.hpp"
+#include <catch2/catch_all.hpp>
 
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/Descriptors/smarts291/SMARTS291.h>
-#include "abraham_integration.cpp"  // Contains calcAbrahamsFeatures
+#include <GraphMol/Descriptors/smarts291/abraham_queries.h>
+#include <GraphMol/Substruct/SubstructMatch.h>
 
 #include <vector>
 #include <string>

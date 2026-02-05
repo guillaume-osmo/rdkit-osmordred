@@ -5,6 +5,15 @@ if(RDK_BUILD_DESCRIPTORS3D)
 
 endif(RDK_BUILD_DESCRIPTORS3D)
 
+# SMARTS291 Abraham features
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  # Include smarts291 folder for Abraham SMARTS-based features
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/smarts291)
+  
+  set(SMARTS291_HDRS smarts291/SMARTS291.h smarts291/abraham_queries.h)
+  set(SMARTS291_SOURCES smarts291/abraham_integration.cpp smarts291/abraham_queries.cpp)
+endif(RDK_BUILD_OSMORDRED_SUPPORT)
+
 
 rdkit_library(Descriptors
               Crippen.cpp BCUT.cpp MolDescriptors.cpp MolSurf.cpp Lipinski.cpp ConnectivityDescriptors.cpp
@@ -15,9 +24,13 @@ rdkit_library(Descriptors
               OxidationNumbers.cpp
               DCLV.cpp
               ${DESC3D_SOURCES}
+              ${SMARTS291_SOURCES}
               LINK_LIBRARIES PartialCharges SmilesParse FileParsers Subgraphs SubstructMatch MolTransforms GraphMol
                  EigenSolvers RDGeneral)
 target_compile_definitions(Descriptors PRIVATE RDKIT_DESCRIPTORS_BUILD)
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  target_compile_definitions(Descriptors PRIVATE RDK_BUILD_OSMORDRED_SUPPORT)
+endif()
 
 rdkit_headers(Crippen.h BCUT.h Lipinski.h
               MolDescriptors.h
@@ -30,6 +43,7 @@ rdkit_headers(Crippen.h BCUT.h Lipinski.h
               OxidationNumbers.h
               DCLV.h
               ${DESC3D_HDRS}
+              ${SMARTS291_HDRS}
               DEST GraphMol/Descriptors)
 
 rdkit_test(testDescriptors test.cpp
@@ -70,6 +84,10 @@ LINK_LIBRARIES  Descriptors ForceFieldHelpers DistGeomHelpers  )
 endif(RDK_BUILD_DESCRIPTORS3D)
 
 rdkit_catch_test(descriptorsTestCatch catch_tests.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  rdkit_catch_test(testSMARTS291 smarts291/test_smarts291.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+endif(RDK_BUILD_OSMORDRED_SUPPORT)
 
 if(RDK_BUILD_PYTHON_WRAPPERS)
 add_subdirectory(Wrap)

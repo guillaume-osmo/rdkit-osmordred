@@ -1,20 +1,26 @@
 // CLEAN Abraham Integration - Uses new query system
 // Generated to match trained model EXACTLY
 // EACH MODEL TYPE USES ITS OWN GOLDEN FEATURES!
+//
+// Note: The full calcAbrahams() function requires trained model headers
+// (AbrahamGBAABRAHAM.h, etc.) which are generated separately.
+// Define HAVE_ABRAHAM_MODELS to enable full Abraham parameter prediction.
 
-#include "Osmordred.h"
 #include "abraham_queries.h"
+#include <GraphMol/RWMol.h>
+#include <GraphMol/Substruct/SubstructMatch.h>
+#include <vector>
+#include <string>
+#include <stdexcept>
+
+#ifdef HAVE_ABRAHAM_MODELS
 #include "AbrahamGBAABRAHAM.h"
 #include "AbrahamGBSABRAHAM.h"
 #include "AbrahamRidgeBABRAHAM.h"
 #include "AbrahamRidgeEABRAHAM.h"
 #include "AbrahamRidgeLABRAHAM.h"
 #include "AbrahamRidgeVABRAHAM.h"
-#include <GraphMol/RWMol.h>
-#include <GraphMol/Substruct/SubstructMatch.h>
-#include <vector>
-#include <string>
-#include <stdexcept>
+#endif
 
 namespace RDKit {
 namespace Descriptors {
@@ -227,6 +233,7 @@ std::vector<double> generateGoldenFeaturesRidge(const std::vector<double>& baseF
 }
 
 
+#ifdef HAVE_ABRAHAM_MODELS
 std::vector<double> calcAbrahams(const RDKit::ROMol& mol) {
     // Extract 241 base features
     std::vector<double> baseFeatures = extractAbrahamBaseFeatures(mol);
@@ -270,6 +277,7 @@ std::vector<double> calcAbrahams(const RDKit::ROMol& mol) {
     
     return {A, B, S, E, L, V};
 }
+#endif // HAVE_ABRAHAM_MODELS
 
 std::vector<double> calcAbrahamsFeatures(const RDKit::ROMol& mol) {
     // Returns the 291 features for the A model (base + A's golden features)
