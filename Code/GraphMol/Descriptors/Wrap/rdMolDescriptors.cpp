@@ -1670,11 +1670,10 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
       "DoubleCubicLatticeVolume",
       "Class for the Double Cubic Lattice Volume method",
       python::init<const RDKit::ROMol &,
-                   python::optional<bool, bool, double, int, int>>(
+                   python::optional<bool, bool, double, int>>(
           (python::args("self", "mol"), python::args("isProtein") = false,
            python::args("includeLigand") = true,
-           python::args("probeRadius") = 1.2, python::args("depth") = 4,
-           python::args("dotDensity") = 0),
+           python::args("probeRadius") = 1.4, python::args("confId") = -1),
           docString.c_str()))
       .def("GetSurfaceArea",
            &RDKit::Descriptors::DoubleCubicLatticeVolume::getSurfaceArea,
