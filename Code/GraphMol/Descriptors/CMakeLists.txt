@@ -5,17 +5,15 @@ if(RDK_BUILD_DESCRIPTORS3D)
 
 endif(RDK_BUILD_DESCRIPTORS3D)
 
+# Osmordred descriptors
 if(RDK_BUILD_OSMORDRED_SUPPORT)
- find_package(LAPACK REQUIRED)
- find_package(LAPACKE REQUIRED)
-
- if(NOT LAPACKE_FOUND)
-   message(fatal_error "-- LAPACKE not found")
- endif()
-
- include_directories(Descriptors LAPACK::LAPACK ${LAPACK_INCLUDE_DIRS})
-
+  find_package(LAPACK REQUIRED)
+  include_directories(${LAPACK_INCLUDE_DIRS})
+  
+  set(OSMORDRED_HDRS Osmordred.h)
+  set(OSMORDRED_SOURCES Osmordred.cpp)
 endif(RDK_BUILD_OSMORDRED_SUPPORT)
+
 
 rdkit_library(Descriptors
               Crippen.cpp BCUT.cpp MolDescriptors.cpp MolSurf.cpp Lipinski.cpp ConnectivityDescriptors.cpp
@@ -25,12 +23,17 @@ rdkit_library(Descriptors
               USRDescriptor.cpp AtomFeat.cpp
               OxidationNumbers.cpp
               DCLV.cpp
-	      Osmordred.cpp
               ${DESC3D_SOURCES}
-              LINK_LIBRARIES DataStructs Fingerprints PartialCharges SmilesParse FileParsers Subgraphs SubstructMatch MolTransforms GraphMol
-                 EigenSolvers RDGeneral)
+              ${OSMORDRED_SOURCES}
+              LINK_LIBRARIES PartialCharges SmilesParse FileParsers Subgraphs SubstructMatch MolTransforms GraphMol
+                 EigenSolvers RDGeneral Fingerprints)
 target_compile_definitions(Descriptors PRIVATE RDKIT_DESCRIPTORS_BUILD)
-target_link_libraries(Descriptors PUBLIC ${LAPACK_LIBRARIES} ${LAPACKE_LIBRARIES} ${BLAS_LIBRARIES})
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  target_compile_definitions(Descriptors PRIVATE RDK_BUILD_OSMORDRED_SUPPORT)
+  find_library(LAPACKE_LIB lapacke HINTS ${CMAKE_PREFIX_PATH}/lib)
+  target_link_libraries(Descriptors PUBLIC ${LAPACK_LIBRARIES} ${LAPACKE_LIB})
+endif()
+
 rdkit_headers(Crippen.h BCUT.h Lipinski.h
               MolDescriptors.h
               MolSurf.h
@@ -41,8 +44,8 @@ rdkit_headers(Crippen.h BCUT.h Lipinski.h
               USRDescriptor.h AtomFeat.h
               OxidationNumbers.h
               DCLV.h
-	      Osmordred.h
               ${DESC3D_HDRS}
+              ${OSMORDRED_HDRS}
               DEST GraphMol/Descriptors)
 
 rdkit_test(testDescriptors test.cpp
@@ -84,7 +87,9 @@ endif(RDK_BUILD_DESCRIPTORS3D)
 
 rdkit_catch_test(descriptorsTestCatch catch_tests.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
 
-rdkit_catch_test(testOsmordred test_osmordred.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  rdkit_catch_test(testOsmordred test_osmordred.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+endif(RDK_BUILD_OSMORDRED_SUPPORT)
 
 if(RDK_BUILD_PYTHON_WRAPPERS)
 add_subdirectory(Wrap)
