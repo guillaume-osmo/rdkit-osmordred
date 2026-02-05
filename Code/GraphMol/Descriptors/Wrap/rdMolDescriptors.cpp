@@ -19,6 +19,8 @@
 
 #include <GraphMol/Descriptors/MolDescriptors.h>
 #include <GraphMol/Descriptors/Osmordred.h>
+#include <GraphMol/Descriptors/smarts291/SMARTS291.h>
+#include <GraphMol/Descriptors/rdkit217/RDKit217Descriptors.h>
 #include <GraphMol/Descriptors/AtomFeat.h>
 #include <GraphMol/Descriptors/OxidationNumbers.h>
 #include <GraphMol/Fingerprints/AtomPairs.h>
@@ -2012,6 +2014,40 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
         "CalcAlphaKappaShapeIndex function\n");
     python::def("CalcAbrahams", RDKit::Descriptors::Osmordred::calcAbrahams,
         "CalcAbrahams function\n");
+    
+    // SMARTS291: Abraham features (291 features for property prediction)
+    python::def("CalcAbrahamFeatures", RDKit::Descriptors::Osmordred::calcAbrahamsFeatures,
+        "Calculate 291 Abraham SMARTS-based features for molecular property prediction.\n"
+        "Returns: vector of 291 double values (241 base SMARTS + 50 golden ratio features)\n");
+    
+    // RDKit217: Standard RDKit descriptors from C++
+    auto rdkit217_from_mols_impl = +[](python::list mols_py, int n_jobs) {
+        std::vector<const RDKit::ROMol*> mols;
+        mols.reserve(python::len(mols_py));
+        for (int i = 0; i < python::len(mols_py); ++i) {
+            python::object obj = mols_py[i];
+            if (obj.is_none()) {
+                mols.push_back(nullptr);
+                continue;
+            }
+            try {
+                const RDKit::ROMol& mol = python::extract<const RDKit::ROMol&>(obj);
+                mols.push_back(&mol);
+            } catch (...) {
+                mols.push_back(nullptr);
+            }
+        }
+        return RDKit::Descriptors::Osmordred::extractRDKitDescriptorsFromMolsBatch(mols, n_jobs);
+    };
+    python::def("ExtractRDKitDescriptorsFromMolsBatch", rdkit217_from_mols_impl,
+        (python::arg("mols"), python::arg("n_jobs")=0),
+        "Extract 217 RDKit descriptors from mol objects in parallel.\n"
+        "Input: list of RDKit Mol objects (can contain None)\n"
+        "Output: list of descriptor vectors (217 features per molecule)\n");
+    
+    python::def("GetRDKit217DescriptorNames", RDKit::Descriptors::Osmordred::getRDKit217DescriptorNames,
+        "Get the 217 RDKit descriptor names in exact order matching Python's Descriptors._descList.\n");
+    
     python::def("CalcPol", RDKit::Descriptors::Osmordred::calcPol,
         "CalcPol function\n");
     python::def("CalcMR", RDKit::Descriptors::Osmordred::calcMR,
