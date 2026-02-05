@@ -1,0 +1,382 @@
+/**
+
+MIT License
+
+Copyright (c) 2025 Jonas Rembser
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
+
+#include "fastforest.h"
+#include "common_details.h"
+
+#include <cassert>
+#include <cmath>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <sstream>
+#include <stdexcept>
+#include <stdlib.h> /* strtol */
+#include <string>
+
+using namespace fastforest;
+
+namespace {
+
+    namespace util {
+
+        // ------------------- float version -------------------
+        float nextafter(float x, float y) {
+            if (x != x || y != y)
+                return std::numeric_limits<float>::quiet_NaN();
+            if (x == y)
+                return y;
+            if (x == 0.0f) {
+                float smallest = std::numeric_limits<float>::denorm_min();
+                return (y > 0) ? smallest : -smallest;
+            }
+
+            int32_t bits;
+            std::memcpy(&bits, &x, sizeof(float));
+
+            if ((x > 0) == (y > x)) {
+                ++bits;
+            } else {
+                --bits;
+            }
+
+            float result;
+            std::memcpy(&result, &bits, sizeof(float));
+            return result;
+        }
+
+        // ------------------- double version -------------------
+        double nextafter(double x, double y) {
+            if (x != x || y != y)
+                return std::numeric_limits<double>::quiet_NaN();
+            if (x == y)
+                return y;
+            if (x == 0.0) {
+                double smallest = std::numeric_limits<double>::denorm_min();
+                return (y > 0) ? smallest : -smallest;
+            }
+
+            int64_t bits;
+            std::memcpy(&bits, &x, sizeof(double));
+
+            if ((x > 0) == (y > x)) {
+                ++bits;
+            } else {
+                --bits;
+            }
+
+            double result;
+            std::memcpy(&result, &bits, sizeof(double));
+            return result;
+        }
+
+        inline bool isInteger(const std::string& s) {
+            if (s.empty() || ((!isdigit(s[0])) && (s[0] != '-') && (s[0] != '+')))
+                return false;
+
+            char* p;
+            strtol(s.c_str(), &p, 10);
+
+            return (*p == 0);
+        }
+
+        template <class Type_t>
+        struct AfterSubstrOutput {
+            explicit AfterSubstrOutput() {
+                value = Type_t();
+                found = false;
+                failed = true;
+            }
+            Type_t value;
+            bool found;
+            bool failed;
+            std::string rest;
+        };
+
+        template <class Type_t>
+        inline AfterSubstrOutput<Type_t> afterSubstr(std::string const& str, std::string const& substr) {
+            AfterSubstrOutput<Type_t> output;
+            output.rest = str;
+
+            std::size_t found = str.find(substr);
+            if (found != std::string::npos) {
+                output.found = true;
+                std::stringstream ss(str.substr(found + substr.size(), str.size() - found + substr.size()));
+                ss >> output.value;
+                if (!ss.fail()) {
+                    output.failed = false;
+                    output.rest = ss.str();
+                }
+            }
+            return output;
+        }
+
+        std::string strAfterSubstr(std::string const& str, std::string const& substr) {
+            std::size_t found = str.find(substr);
+            if (found != std::string::npos) {
+                return str.substr(found + substr.size(), str.size() - found + substr.size());
+            }
+            return "";
+        }
+
+        std::vector<std::string> split(std::string const& strToSplit, char delimiter) {
+            std::stringstream ss(strToSplit);
+            std::string item;
+            std::vector<std::string> splitStrings;
+            while (std::getline(ss, item, delimiter)) {
+                splitStrings.push_back(item);
+            }
+            return splitStrings;
+        }
+
+        bool exists(std::string const& filename) {
+            if (FILE* file = fopen(filename.c_str(), "r")) {
+                fclose(file);
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        template <class Type_t>
+        void parseList(std::vector<Type_t>& result, const std::string& input) {
+            std::string s = input;
+
+            // Remove square brackets if present
+            if (!s.empty() && s[0] == '[')
+                s.erase(0, 1);
+            if (!s.empty() && s[s.size() - 1] == ']')
+                s.erase(s.size() - 1);
+
+            std::stringstream ss(s);
+            std::string number;
+
+            while (std::getline(ss, number, ',')) {
+                std::stringstream numStream(number);
+                Type_t value;
+                if (numStream >> value) {
+                    result.push_back(value);
+                }
+            }
+        }
+
+    }  // namespace util
+
+    void terminateTree(fastforest::FastForest& ff,
+                       int& nPreviousNodes,
+                       int& nPreviousLeaves,
+                       fastforest::detail::IndexMap& nodeIndices,
+                       fastforest::detail::IndexMap& leafIndices,
+                       int& treesSkipped) {
+        using namespace fastforest::detail;
+        correctIndices(ff.rightIndices_.begin() + nPreviousNodes, ff.rightIndices_.end(), nodeIndices, leafIndices);
+        correctIndices(ff.leftIndices_.begin() + nPreviousNodes, ff.leftIndices_.end(), nodeIndices, leafIndices);
+
+        if (nPreviousNodes != ff.cutValues_.size()) {
+            ff.treeNumbers_.push_back(ff.rootIndices_.size() + treesSkipped);
+            ff.rootIndices_.push_back(nPreviousNodes);
+        } else {
+            int treeNumbers = ff.rootIndices_.size() + treesSkipped;
+            ++treesSkipped;
+            ff.baseResponses_[treeNumbers % ff.baseResponses_.size()] += ff.responses_.back();
+            ff.responses_.pop_back();
+        }
+
+        nodeIndices.clear();
+        leafIndices.clear();
+        nPreviousNodes = ff.cutValues_.size();
+        nPreviousLeaves = ff.responses_.size();
+    }
+
+}  // namespace
+
+FastForest fastforest::load_txt(std::string const& txtpath, std::vector<std::string>& features, int nClasses) {
+    const std::string info = "constructing FastForest from " + txtpath + ": ";
+
+    if (!util::exists(txtpath)) {
+        throw std::runtime_error(info + "file does not exists");
+    }
+
+    std::ifstream file(txtpath.c_str());
+    return load_txt(file, features, nClasses);
+}
+
+FastForest fastforest::load_txt(std::istream& file, std::vector<std::string>& features, int nClasses) {
+    if (nClasses < 2) {
+        throw std::runtime_error("Error in fastforest::load_txt : nClasses has to be at least two");
+    }
+
+    const std::string info = "constructing FastForest from istream: ";
+
+    FastForest ff;
+    ff.baseResponses_.resize(nClasses == 2 ? 1 : nClasses);
+
+    int treesSkipped = 0;
+
+    int nVariables = 0;
+    std::map<std::string, int> varIndices;
+    bool fixFeatures = false;
+
+    if (!features.empty()) {
+        fixFeatures = true;
+        nVariables = features.size();
+        for (int i = 0; i < nVariables; ++i) {
+            varIndices[features[i]] = i;
+        }
+    }
+
+    std::string line;
+
+    fastforest::detail::IndexMap nodeIndices;
+    fastforest::detail::IndexMap leafIndices;
+
+    int nPreviousNodes = 0;
+    int nPreviousLeaves = 0;
+
+    std::vector<TreeEnsembleResponseType> baseScore;
+
+    while (std::getline(file, line)) {
+        std::size_t foundBegin = line.find("[");
+        std::size_t foundEnd = line.find("]");
+        util::AfterSubstrOutput<TreeResponseType> leafOutput = util::afterSubstr<TreeResponseType>(line, "leaf=");
+        std::string baseScoreOutput = util::strAfterSubstr(line, "base_score=");
+        if (!baseScoreOutput.empty()) {
+            util::parseList(baseScore, baseScoreOutput);
+        } else if (foundBegin != std::string::npos) {
+            std::string subline = line.substr(foundBegin + 1, foundEnd - foundBegin - 1);
+            if (util::isInteger(subline) && !ff.responses_.empty()) {
+                terminateTree(ff, nPreviousNodes, nPreviousLeaves, nodeIndices, leafIndices, treesSkipped);
+            } else if (!util::isInteger(subline)) {
+                std::stringstream ss(line);
+                int index;
+                ss >> index;
+                line = ss.str();
+
+                std::vector<std::string> splitstring = util::split(subline, '<');
+                std::string const& varName = splitstring[0];
+                FeatureType cutValue;
+                {
+                    bool lessEqual = false;
+                    if (splitstring[1][0] == '=') {
+                        splitstring[1] = splitstring[1].substr(1);
+                        lessEqual = true;
+                    }
+                    std::stringstream ss(splitstring[1]);
+                    ss >> cutValue;
+                    if (lessEqual) {
+                        FeatureType val = cutValue;
+                        cutValue = util::nextafter(val, std::numeric_limits<FeatureType>::infinity());
+#if __cplusplus >= 201103L
+                        assert(cutValue == std::nextafter(val, std::numeric_limits<FeatureType>::infinity()));
+#endif
+                    }
+                }
+                if (!varIndices.count(varName)) {
+                    if (fixFeatures) {
+                        throw std::runtime_error(info + "feature " + varName + " not in list of features");
+                    }
+                    varIndices[varName] = nVariables;
+                    features.push_back(varName);
+                    ++nVariables;
+                }
+                int yes;
+                int no;
+                util::AfterSubstrOutput<int> output = util::afterSubstr<int>(line, "yes=");
+                if (!output.failed) {
+                    yes = output.value;
+                } else {
+                    throw std::runtime_error(info + "problem while parsing the text dump");
+                }
+                output = util::afterSubstr<int>(output.rest, "no=");
+                if (!output.failed) {
+                    no = output.value;
+                } else {
+                    throw std::runtime_error(info + "problem while parsing the text dump");
+                }
+
+                ff.cutValues_.push_back(cutValue);
+                ff.cutIndices_.push_back(varIndices[varName]);
+                ff.leftIndices_.push_back(yes);
+                ff.rightIndices_.push_back(no);
+                std::size_t nNodeIndices = nodeIndices.size();
+                nodeIndices[index] = nNodeIndices + nPreviousNodes;
+            }
+
+        } else if (leafOutput.found) {
+            std::stringstream ss(line);
+            int index;
+            ss >> index;
+            line = ss.str();
+
+            ff.responses_.push_back(leafOutput.value);
+            std::size_t nLeafIndices = leafIndices.size();
+            leafIndices[index] = nLeafIndices + nPreviousLeaves;
+        }
+    }
+    terminateTree(ff, nPreviousNodes, nPreviousLeaves, nodeIndices, leafIndices, treesSkipped);
+
+    if (baseScore.empty()) {
+        std::stringstream ss;
+        ss << "\nERROR: The model dump is missing the required base_score=<float> line.\n"
+           << "       Without this hint, FastForest cannot guarantee correct parsing,\n"
+           << "       and inference results may be silently incorrect.\n\n"
+           << "To ensure the version hint is always consistent with the actual model\n"
+           << "you trained, we recommend appending the required line\n"
+           << "right after dumping the model. For example:\n\n"
+           << "    outfile = \"model.txt\"\n"
+           << "    booster = model.get_booster()\n"
+           << "    # Dump the model to a .txt file\n"
+           << "    booster.dump_model(outfile, fmap=\"\", with_stats=False, dump_format=\"text\")\n"
+           << "    # Append the base score (unfortunately missing in the .txt dump)\n"
+           << "    with open(outfile, \"a\") as f:\n"
+           << "        import json\n"
+           << "\n"
+           << "        json_dump = json.loads(booster.save_config())\n"
+           << "        base_score_str = json_dump[\"learner\"][\"learner_model_param\"][\"base_score\"]\n"
+           << "        base_score = json.loads(base_score_str)\n"
+           << "        if isinstance(base_score, float):\n"
+           << "            # Before XGBoost 3.1.0, this was a single float.\n"
+           << "            # So we have to pack it into a list ourselves.\n"
+           << "            base_score = [base_score]\n"
+           << "        f.write(f\"base_score={base_score}\\n\")\n\n";
+        throw std::runtime_error(ss.str());
+    }
+
+    if (nClasses > 2 && (ff.rootIndices_.size() + treesSkipped) % nClasses != 0) {
+        std::stringstream ss;
+        ss << "Error in FastForest construction : Forest has " << ff.rootIndices_.size()
+           << " trees, which is not compatible with " << nClasses << "classes!";
+        throw std::runtime_error(ss.str());
+    }
+
+    for (std::size_t i = 0; i < ff.baseResponses_.size(); ++i) {
+        ff.baseResponses_[i] += baseScore.size() == 1 ? baseScore[0] : baseScore[i];
+    }
+
+    return ff;
+}

@@ -1,0 +1,84 @@
+// Unified Physical-Chemical Properties Calculator
+// Returns 22 properties: Abraham (6) + Physical (3) + Hansen (3) + Meta37 (10)
+// Declarations are in Osmordred.h
+
+#include "Osmordred.h"
+#include "OsmordredMeta37Simple.h"
+
+#include <GraphMol/ROMol.h>
+#include <vector>
+#include <string>
+
+namespace RDKit {
+namespace Descriptors {
+namespace Osmordred {
+
+// Property names in order of PhysChemPropIndex enum (defined in Osmordred.h)
+const char* getPhysChemPropName(int index) {
+    static const char* names[] = {
+        "V", "Polarizability", "L", "E", "B", "Density", "RI", "S", "A",
+        "dD", "dH", "dP", "BP", "logVP", "logPow", "logWS",
+        "deltaHf", "deltaHc", "MP", "Flashpoint", "logHenrycc", "DipoleMoment"
+    };
+    if (index >= 0 && index < NUM_PHYSCHEM_PROPS) return names[index];
+    return "Unknown";
+}
+
+std::vector<std::string> getPhysChemPropNames() {
+    std::vector<std::string> names;
+    for (int i = 0; i < NUM_PHYSCHEM_PROPS; ++i) {
+        names.push_back(getPhysChemPropName(i));
+    }
+    return names;
+}
+
+// Calculate all 22 physical-chemical properties
+// Order matches PhysChemPropIndex enum:
+// [V, Polarizability, L, E, B, Density, RI, S, A, dD, dH, dP, BP, logVP, logPow, logWS, deltaHf, deltaHc, MP, Flashpoint, logHenrycc, DipoleMoment]
+std::vector<double> calcPhysChemProp(const ROMol& mol) {
+    std::vector<double> results(NUM_PHYSCHEM_PROPS);
+    
+    // Step 1: Get Abraham parameters using AbrahamV2 cascade
+    // calcAbrahamsV2 returns: [A, B, S, E, L, V]
+    std::vector<double> abraham = calcAbrahamsV2(mol);
+    
+    // Map to PhysChemPropIndex order
+    results[PROP_V] = abraham[5];           // V
+    results[PROP_L] = abraham[4];           // L
+    results[PROP_E] = abraham[3];           // E
+    results[PROP_B] = abraham[1];           // B
+    results[PROP_S] = abraham[2];           // S
+    results[PROP_A] = abraham[0];           // A
+    
+    // Step 2: Get Density, RI, Polarizability from cascade
+    // These are calculated by calcAbrahamsV2Cascade but not exposed yet
+    // For now using placeholders - TODO: expose from cascade
+    results[PROP_POLARIZABILITY] = 0.0;     // Polarizability (placeholder)
+    results[PROP_DENSITY] = 1.0;            // Density (placeholder)
+    results[PROP_RI] = 1.4;                 // RI (placeholder)
+    
+    // Step 3: Get Meta37 properties using Simple model
+    // calcMeta37Simple returns: [dD, dH, dP, BP, logVP, logPow, logWS, deltaHf, deltaHc, MP, flashpoint, logHenrycc, dipolemoment]
+    std::vector<double> meta37 = calcMeta37Simple(mol);
+    
+    // Map Meta37 to results
+    results[PROP_DD] = meta37[0];           // dD
+    results[PROP_DH] = meta37[1];           // dH
+    results[PROP_DP] = meta37[2];           // dP
+    results[PROP_BP] = meta37[3];           // BP
+    results[PROP_LOGVP] = meta37[4];        // logVP
+    results[PROP_LOGPOW] = meta37[5];       // logPow
+    results[PROP_LOGWS] = meta37[6];        // logWS
+    results[PROP_DELTAHF] = meta37[7];      // deltaHf
+    results[PROP_DELTAHC] = meta37[8];      // deltaHc
+    results[PROP_MP] = meta37[9];           // MP
+    results[PROP_FLASHPOINT] = meta37[10];  // flashpoint
+    results[PROP_LOGHENRYCC] = meta37[11];  // logHenrycc
+    results[PROP_DIPOLEMOMENT] = meta37[12];// dipolemoment
+    
+    return results;
+}
+
+}  // namespace Osmordred
+}  // namespace Descriptors
+}  // namespace RDKit

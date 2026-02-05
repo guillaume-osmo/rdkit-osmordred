@@ -1,0 +1,74 @@
+// Simple Meta37 Integration - Direct Osmordred + MW features
+// Uses feature selection for BP, MP, Flashpoint (Fixed models)
+
+#include "Osmordred.h"
+#include "OsmordredMeta37Dd.h"
+#include "OsmordredMeta37Dh.h"
+#include "OsmordredMeta37Dp.h"
+#include "OsmordredMeta37BpFixed.h"       // Uses feature selection
+#include "OsmordredMeta37Logvp.h"
+#include "OsmordredMeta37Logpow.h"
+#include "OsmordredMeta37Logws.h"
+#include "OsmordredMeta37Deltahf.h"
+#include "OsmordredMeta37Deltahc.h"
+#include "OsmordredMeta37MpFixed.h"       // Uses feature selection
+#include "OsmordredMeta37FlashpointFixed.h"  // Uses feature selection
+#include "OsmordredMeta37Loghenrycc.h"
+#include "OsmordredMeta37Dipolemoment.h"
+
+#include <GraphMol/ROMol.h>
+#include <GraphMol/Descriptors/MolDescriptors.h>
+#include <vector>
+#include <cmath>
+
+namespace RDKit {
+namespace Descriptors {
+namespace Osmordred {
+
+// Build features: Osmordred (3585) + MW (1) = 3586 total
+std::vector<double> buildSimpleFeatures(const ROMol& mol) {
+    std::vector<double> osmo = calcOsmordred(mol);
+    double MW = calcAMW(mol);
+    
+    std::vector<double> features;
+    features.reserve(3586);
+    
+    // Copy Osmordred
+    for (double v : osmo) {
+        if (std::isinf(v)) v = 0.0;
+        if (std::isnan(v)) v = 0.0;
+        features.push_back(v);
+    }
+    
+    // Add MW
+    features.push_back(MW);
+    
+    return features;
+}
+
+// Calculate all Meta37 properties using simple features
+std::vector<double> calcMeta37Simple(const ROMol& mol) {
+    std::vector<double> features = buildSimpleFeatures(mol);
+    const double* f = features.data();
+    std::vector<double> results(13);
+    
+    results[0] = ::Osmordred::Meta37Dd::predict(f);           // dD
+    results[1] = ::Osmordred::Meta37Dh::predict(f);           // dH
+    results[2] = ::Osmordred::Meta37Dp::predict(f);           // dP
+    results[3] = ::Osmordred::Meta37BpFixed::predictFromFull(features);    // BP (feature selection)
+    results[4] = ::Osmordred::Meta37Logvp::predict(f);        // logVP
+    results[5] = ::Osmordred::Meta37Logpow::predict(f);       // logPow
+    results[6] = ::Osmordred::Meta37Logws::predict(f);        // logWS
+    results[7] = ::Osmordred::Meta37Deltahf::predict(f);      // deltaHf
+    results[8] = ::Osmordred::Meta37Deltahc::predict(f);      // deltaHc
+    results[9] = ::Osmordred::Meta37MpFixed::predictFromFull(features);    // MP (feature selection)
+    results[10] = ::Osmordred::Meta37FlashpointFixed::predictFromFull(features);  // FP (feature selection)
+    results[11] = ::Osmordred::Meta37Loghenrycc::predict(f);  // logHenrycc
+    results[12] = ::Osmordred::Meta37Dipolemoment::predict(f);// dipolemoment
+    
+    return results;
+}
+
+}  // namespace Osmordred
+}  // namespace Descriptors
+}  // namespace RDKit

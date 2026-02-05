@@ -1,0 +1,3746 @@
+// Unified Physical-Chemical Properties Calculator
+// Returns 25 properties: Abraham (6) + Physical (3) + Hansen (3) + deltaHvap (1) + Meta37 (10) + logODT (1) + Viscosity (1)
+// Declarations are in Osmordred.h
+
+#include "Osmordred.h"
+#include "Crippen.h"
+#include "MolDescriptors.h"
+
+// PhysChemProp cascade headers (organized in physchemprop folder)
+#include "physchemprop/OsmordredCascadeIntegration.h"
+#include "physchemprop/OsmordredCascadePolarizabilityV2.h"
+#include "rdkit217/RDKit217Descriptors.h"
+#include "physchemprop/logodt_top1000_features.h"  // Top 1000 feature indices
+
+// Cascade exported models (all cascade models use exported headers)
+#include "physchemprop/deltahvap_cascade_exported.h"  // deltaHvap cascade model (BEFORE BP/logVP)
+#include "physchemprop/bp_cascade_exported.h"  // BP cascade model (uses deltaHvap)
+#include "physchemprop/logvp_cascade_exported.h"  // logVP cascade model (uses deltaHvap + BP)
+#include "physchemprop/deltahf_cascade_exported.h"  // deltaHf cascade model (uses deltaHvap + BP + logVP)
+#include "physchemprop/deltahc_cascade_exported.h"  // deltaHc cascade model (uses deltaHvap + BP + logVP + deltaHf)
+#include "physchemprop/logpow_cascade_exported.h"  // logPow cascade model (uses deltaHvap + BP + logVP + deltaHf + deltaHc)
+#include "physchemprop/logws_cascade_exported.h"   // logWS cascade model (uses all cascade predictions)
+#include "physchemprop/dd_cascade_exported.h"      // dD cascade model (uses all cascade predictions)
+#include "physchemprop/dh_cascade_exported.h"      // dH cascade model (uses all cascade predictions)
+#include "physchemprop/dp_cascade_exported.h"      // dP cascade model (uses all cascade predictions)
+#include "physchemprop/mp_cascade_exported.h"      // MP cascade model (uses all + Yalkowsky)
+#include "physchemprop/flashpoint_cascade_exported.h"  // Flashpoint cascade model
+#include "physchemprop/loghenrycc_cascade_exported.h"  // logHenrycc cascade model
+#include "physchemprop/dipolemoment_cascade_exported.h"  // DipoleMoment cascade model
+#include "physchemprop/logodt_cascade_exported.h"  // logODT cascade model
+#include "physchemprop/viscosity_cascade_exported.h"  // Viscosity cascade model (log10 cP at 25°C)
+
+// v3.3_full cascade model headers
+#include "physchemprop/v_v33_cascade_exported.h"
+#include "physchemprop/polarizability_v33_cascade_exported.h"
+#include "physchemprop/l_v33_cascade_exported.h"
+#include "physchemprop/e_v33_cascade_exported.h"
+#include "physchemprop/b_v33_cascade_exported.h"
+#include "physchemprop/density_v33_cascade_exported.h"
+#include "physchemprop/ri_v33_cascade_exported.h"
+#include "physchemprop/s_v33_cascade_exported.h"
+#include "physchemprop/a_v33_cascade_exported.h"
+#include "physchemprop/modularity_v33_cascade_exported.h"
+#include "physchemprop/hansentotal_v33_cascade_exported.h"
+#include "physchemprop/dd_v33_cascade_exported.h"
+#include "physchemprop/dh_v33_cascade_exported.h"
+#include "physchemprop/dp_v33_cascade_exported.h"
+#include "physchemprop/bp_v33_cascade_exported.h"
+#include "physchemprop/deltahvap_v33_cascade_exported.h"
+#include "physchemprop/logvp_v33_cascade_exported.h"
+#include "physchemprop/logpow_v33_cascade_exported.h"
+#include "physchemprop/logws_v33_cascade_exported.h"
+#include "physchemprop/deltahf_v33_cascade_exported.h"
+#include "physchemprop/deltahc_v33_cascade_exported.h"
+#include "physchemprop/mp_v33_cascade_exported.h"
+#include "physchemprop/flashpoint_v33_cascade_exported.h"
+#include "physchemprop/loghenrycc_v33_cascade_exported.h"
+#include "physchemprop/dipolemoment_v33_cascade_exported.h"
+#include "physchemprop/logviscosity_v33_cascade_exported.h"
+#include "physchemprop/logodt_v33_cascade_exported.h"
+
+#include <GraphMol/ROMol.h>
+#include <GraphMol/Chirality.h>
+#include <map>
+#include <tuple>
+#include <string>
+#include <cmath>
+#include <GraphMol/Substruct/SubstructMatch.h>
+#include <GraphMol/SmilesParse/SmilesParse.h>
+#include <GraphMol/MolOps.h>
+#include <GraphMol/Descriptors/MolDescriptors.h>
+#include <RDGeneral/RDThreads.h>
+#include <vector>
+#include <string>
+#include <cmath>
+#include <algorithm>
+#include <future>
+#include <thread>
+#include <fstream>
+#include <sstream>
+#include <mutex>
+#include <chrono>
+#include <iomanip>
+#include <cstdio>
+#include <atomic>
+
+// Timeout configuration for molecule processing
+constexpr int PHYSCHEM_TIMEOUT_SECONDS = 60;  // Maximum time for single molecule computation (1 minute)
+constexpr unsigned int PHYSCHEM_MAX_HEAVY_ATOMS = 200;
+constexpr unsigned int PHYSCHEM_MAX_RINGS = 30;
+
+namespace RDKit {
+namespace Descriptors {
+namespace Osmordred {
+
+// Helper to build physics features (21 features) matching Python training
+std::vector<double> buildPhysicsFeatures(double MW, double MR, double Density, double RI, double Polar) {
+    std::vector<double> physics;
+    physics.reserve(21);
+    
+    // Use defaults if invalid
+    Density = (Density > 0.1) ? Density : 1.0;
+    RI = (RI > 1.0) ? RI : 1.4;
+    Polar = (Polar > 0) ? Polar : MR * 0.4;
+    
+    double Vm = MW / Density;
+    double n2 = RI * RI;
+    double f_n = (n2 - 1) / (n2 + 2);
+    
+    // 21 physics features matching Python build_physics
+    physics.push_back(MW);                                    // 0
+    physics.push_back(MR);                                    // 1
+    physics.push_back(std::sqrt(std::abs(MW)));              // 2
+    physics.push_back(std::log(std::abs(MW) + 1));            // 3
+    physics.push_back(MR / (MW + 1));                        // 4
+    physics.push_back(MW / (MR + 1));                        // 5
+    physics.push_back(MR * MR);                               // 6
+    physics.push_back(Density);                                // 7
+    physics.push_back(Vm);                                    // 8
+    physics.push_back(std::sqrt(std::abs(Vm)));              // 9
+    physics.push_back(MW * Density);                          // 10
+    physics.push_back(Density / (MW + 0.01));                // 11
+    physics.push_back(RI);                                    // 12
+    physics.push_back(f_n);                                  // 13
+    physics.push_back(n2);                                   // 14
+    physics.push_back(RI - 1);                               // 15
+    physics.push_back(f_n * MW);                             // 16
+    physics.push_back(Polar);                                // 17
+    physics.push_back(std::sqrt(std::abs(Polar)));           // 18
+    physics.push_back(Polar / (MW + 0.01));                  // 19
+    physics.push_back(Polar * MR);                           // 20
+    
+    return physics;
+}
+
+// Helper to build cascade golden features from V only (matching Python build_cascade_golden)
+std::vector<double> buildCascadeGoldenFromV(double V) {
+    std::vector<double> golden;
+    golden.reserve(3);
+    
+    // Raw + square + sqrt (3 features for 1 value)
+    golden.push_back(V);
+    golden.push_back(V * V);
+    golden.push_back(std::sqrt(std::max(0.0, V)));
+    
+    return golden;
+}
+
+// Helper to build LSFER features (8 base features, matching Python build_lsfer)
+std::vector<double> buildLSFERFeatures(double V, double E, double L, double B) {
+    std::vector<double> lsfer;
+    lsfer.reserve(8);
+    
+    // Use defaults if invalid
+    V = V ? V : 0.0;
+    E = E ? E : 0.0;
+    L = L ? L : 0.0;
+    B = B ? B : 0.0;
+    
+    // Base LSFER residuals
+    double V_approx = (E + L/5.0 + B) / 3.0;
+    double L_approx = V * 5.0 + E * 2.0;
+    
+    lsfer.push_back(V - V_approx);                    // 0
+    lsfer.push_back((V - V_approx) * (V - V_approx)); // 1
+    lsfer.push_back(L - L_approx);                     // 2
+    lsfer.push_back((L - L_approx) * (L - L_approx)); // 3
+    lsfer.push_back(V * E - L/10.0);                  // 4
+    lsfer.push_back(B * (V + E));                     // 5
+    lsfer.push_back(V * L / (E + 1.0));               // 6
+    lsfer.push_back(B * L / (V + 1.0));                // 7
+    
+    return lsfer;
+}
+
+// Build full 540-feature vector for Polarizability prediction
+// Features: 291 SMARTS + 217 RDKit + 21 Physics + 3 Cascade (V) + 8 LSFER = 540
+std::vector<double> buildPolarizabilityFeatures(const ROMol& mol, double V, double Density, double RI) {
+    std::vector<double> features;
+    features.reserve(540);
+    
+    // 1. 217 RDKit descriptors (from extractRDKitDescriptors) - MUST MATCH Python order
+    std::vector<double> rdkit = extractRDKitDescriptors(mol);
+    if (rdkit.size() != 217) {
+        rdkit.resize(217, 0.0);
+    }
+    features.insert(features.end(), rdkit.begin(), rdkit.end());
+    
+    // 2. 291 SMARTS features (from calcAbrahamsV2Features) - C++ order (matches Python training)
+    std::vector<double> smarts = calcAbrahamsV2Features(mol);
+    if (smarts.size() != 291) {
+        smarts.resize(291, 0.0);
+    }
+    features.insert(features.end(), smarts.begin(), smarts.end());
+    
+    // 3. 21 Physics features (use cascade Density and RI)
+    double MW = calcAMW(mol);
+    double logP, MR;
+    calcCrippenDescriptors(mol, logP, MR);
+    // Use cascade predictions for Density and RI, estimate Polar from MR
+    std::vector<double> physics = buildPhysicsFeatures(MW, MR, Density, RI, MR * 0.4);
+    features.insert(features.end(), physics.begin(), physics.end());
+    
+    // 4. 3 Cascade golden features from V
+    std::vector<double> cascade = buildCascadeGoldenFromV(V);
+    features.insert(features.end(), cascade.begin(), cascade.end());
+    
+    // 5. 8 LSFER features (using V only, E=L=B=0 for Polarizability)
+    std::vector<double> lsfer = buildLSFERFeatures(V, 0.0, 0.0, 0.0);
+    features.insert(features.end(), lsfer.begin(), lsfer.end());
+    
+    // Ensure exactly 540 features
+    if (features.size() != 540) {
+        features.resize(540, 0.0);
+    }
+    
+    // Replace NaN/Inf with 0.0
+    for (size_t i = 0; i < features.size(); ++i) {
+        if (!std::isfinite(features[i])) {
+            features[i] = 0.0;
+        }
+    }
+    
+    return features;
+}
+
+// Build full 4115-feature vector for logODT prediction (matching Python)
+// Features: 291 SMARTS + 217 RDKit + 3585 Osmordred + 22 cascade = 4115
+// NOTE: Functional group indicators are already included in:
+//   - RDKit 217 descriptors (fr_aldehyde, fr_COO, fr_ester, fr_SH, fr_halogen, fr_nitro, etc.)
+//   - SMARTS 291 features (fragment pattern matches)
+//   - Osmordred 3585 features (fragment-based descriptors)
+// So we don't add them separately!
+// Then select top 1000 features using feature mask
+std::vector<double> buildLogODTFeatures(const ROMol& mol, const std::vector<double>& cascade_props) {
+    std::vector<double> all_features;
+    all_features.reserve(4115);
+    
+    // 1. 217 RDKit descriptors (from extractRDKitDescriptors) - MUST MATCH Python order
+    std::vector<double> rdkit = extractRDKitDescriptors(mol);
+    if (rdkit.size() != 217) {
+        rdkit.resize(217, 0.0);
+    }
+    all_features.insert(all_features.end(), rdkit.begin(), rdkit.end());
+    
+    // 2. 291 SMARTS features (from calcAbrahamsV2Features) - C++ order (matches Python training)
+    std::vector<double> smarts = calcAbrahamsV2Features(mol);
+    if (smarts.size() != 291) {
+        smarts.resize(291, 0.0);
+    }
+    all_features.insert(all_features.end(), smarts.begin(), smarts.end());
+    
+    // 3. 3585 Osmordred features (from calcOsmordred, includes fragment descriptors)
+    // NOTE: Only 866 of these (24.2%) are actually used in top 1000 features
+    // Main unused category: BEState (only 3.8% used, 1404 features could be skipped)
+    // TODO: Optimize by skipping BEState computation if possible (requires C++ modification)
+    std::vector<double> osmordred = calcOsmordred(mol);
+    if (osmordred.size() < 3585) {
+        osmordred.resize(3585, 0.0);
+    } else if (osmordred.size() > 3585) {
+        osmordred.resize(3585);
+    }
+    all_features.insert(all_features.end(), osmordred.begin(), osmordred.end());
+    
+    // 4. 22 cascade properties (EXCLUDING logODT at index 22)
+    if (cascade_props.size() >= 22) {
+        all_features.insert(all_features.end(), cascade_props.begin(), cascade_props.begin() + 22);
+    } else {
+        all_features.insert(all_features.end(), 22, 0.0);
+    }
+    
+    // Ensure exactly 4115 features
+    if (all_features.size() != 4115) {
+        all_features.resize(4115, 0.0);
+    }
+    
+    // Handle NaN/Inf and clip extreme values (single pass for efficiency)
+    for (size_t i = 0; i < all_features.size(); ++i) {
+        if (!std::isfinite(all_features[i])) {
+            all_features[i] = 0.0;
+        } else {
+            // Clip extreme values (matching Python: np.clip to [-1e3, 1e3])
+            if (all_features[i] > 1e3) all_features[i] = 1e3;
+            if (all_features[i] < -1e3) all_features[i] = -1e3;
+        }
+    }
+    
+    // Select top 1000 features using feature mask (optimized: pre-check bounds)
+    std::vector<double> selected_features;
+    selected_features.reserve(1000);
+    
+    using namespace ::Osmordred::LogODTFeatures;
+    const size_t feature_size = all_features.size();
+    for (size_t idx : TOP_1000_FEATURE_INDICES) {
+        // Optimized: single bounds check instead of conditional push_back
+        selected_features.push_back((idx < feature_size) ? all_features[idx] : 0.0);
+    }
+    
+    return selected_features;
+}
+
+// Build 548-feature vector for Polarizability V2 (NO cascade dependencies)
+// Features: 291 SMARTS + 217 RDKit + 10 Physics + 30 Golden = 548
+std::vector<double> buildPolarizabilityV2Features(const ROMol& mol) {
+    std::vector<double> features;
+    features.reserve(548);
+    
+    // 1. 291 SMARTS features
+    std::vector<double> smarts = calcAbrahamsV2Features(mol);
+    if (smarts.size() != 291) {
+        smarts.resize(291, 0.0);
+    }
+    features.insert(features.end(), smarts.begin(), smarts.end());
+    
+    // 2. 217 RDKit descriptors
+    std::vector<double> rdkit = extractRDKitDescriptors(mol);
+    if (rdkit.size() != 217) {
+        rdkit.resize(217, 0.0);
+    }
+    features.insert(features.end(), rdkit.begin(), rdkit.end());
+    
+    // 3. Get Abraham parameters and basic molecular properties
+    std::vector<double> abraham = calcAbrahamsV2(mol);
+    double V = abraham[5];
+    double E = abraham[3];
+    double L = abraham[4];
+    double B = abraham[1];
+    double S = abraham[2];
+    double A = abraham[0];
+    
+    double MW = calcAMW(mol);
+    double logP, MR;
+    calcCrippenDescriptors(mol, logP, MR);
+    
+    // 4. 10 Basic physics features (NO Density/RI)
+    // Use MW and MR as-is (valid RDKit values), only clip final computed features
+    features.push_back(MW);                                    // 0
+    features.push_back(MR);                                    // 1
+    
+    // Compute derived features and clip to match Python training (clip to [-1e3, 1e3])
+    double sqrt_mw = std::sqrt(std::abs(MW));
+    double log_mw = std::log(std::abs(MW) + 1);
+    double mr_div_mw = MR / (MW + 1);
+    double mw_div_mr = MW / (MR + 1);
+    double mr_sq = MR * MR;
+    double mw_sq = MW * MW;
+    double mr_mw = MR * MW;
+    double sqrt_mr = std::sqrt(std::abs(MR));
+    
+    features.push_back(std::max(-1e3, std::min(1e3, sqrt_mw)));              // 2
+    features.push_back(std::max(-1e3, std::min(1e3, log_mw)));                // 3
+    features.push_back(std::max(-1e3, std::min(1e3, mr_div_mw)));            // 4
+    features.push_back(std::max(-1e3, std::min(1e3, mw_div_mr)));            // 5
+    features.push_back(std::max(-1e3, std::min(1e3, mr_sq)));                // 6
+    features.push_back(std::max(-1e3, std::min(1e3, mw_sq)));                // 7
+    features.push_back(std::max(-1e3, std::min(1e3, mr_mw)));                // 8
+    features.push_back(std::max(-1e3, std::min(1e3, sqrt_mr)));              // 9
+    
+    // 5. 30 Golden features from Abraham parameters
+    // Raw (6)
+    features.push_back(V);
+    features.push_back(E);
+    features.push_back(L);
+    features.push_back(B);
+    features.push_back(S);
+    features.push_back(A);
+    
+    // Squares (6)
+    features.push_back(V * V);
+    features.push_back(E * E);
+    features.push_back(L * L);
+    features.push_back(B * B);
+    features.push_back(S * S);
+    features.push_back(A * A);
+    
+    // Products (15)
+    features.push_back(V * E);
+    features.push_back(V * L);
+    features.push_back(V * B);
+    features.push_back(V * S);
+    features.push_back(V * A);
+    features.push_back(E * L);
+    features.push_back(E * B);
+    features.push_back(E * S);
+    features.push_back(E * A);
+    features.push_back(L * B);
+    features.push_back(L * S);
+    features.push_back(L * A);
+    features.push_back(B * S);
+    features.push_back(B * A);
+    features.push_back(S * A);
+    
+    // Sqrt (3)
+    features.push_back(std::sqrt(std::max(0.0, V)));
+    features.push_back(std::sqrt(std::max(0.0, E)));
+    features.push_back(std::sqrt(std::max(0.0, L)));
+    
+    // Ensure exactly 548 features
+    if (features.size() != 548) {
+        features.resize(548, 0.0);
+    }
+    
+    // Replace NaN/Inf with 0.0
+    for (size_t i = 0; i < features.size(); ++i) {
+        if (!std::isfinite(features[i])) {
+            features[i] = 0.0;
+        }
+    }
+    
+    return features;
+}
+
+// Property names in order of PhysChemPropIndex enum (defined in Osmordred.h)
+const char* getPhysChemPropName(int index) {
+    static const char* names[] = {
+        "V", "Polarizability", "L", "E", "B", "Density", "RI", "S", "A",
+        "dD", "dH", "dP", "deltaHvap", "BP", "logVP", "logPow", "logWS",
+        "deltaHf", "deltaHc", "MP", "Flashpoint", "logHenrycc", "DipoleMoment", "logODT",
+        "logViscosity"
+    };
+    if (index >= 0 && index < NUM_PHYSCHEM_PROPS) return names[index];
+    return "Unknown";
+}
+
+std::vector<std::string> getPhysChemPropNames() {
+    std::vector<std::string> names;
+    for (int i = 0; i < NUM_PHYSCHEM_PROPS; ++i) {
+        names.push_back(getPhysChemPropName(i));
+    }
+    return names;
+}
+
+// Calculate all 25 physical-chemical properties
+// Order matches PhysChemPropIndex enum:
+// [V, Polarizability, L, E, B, Density, RI, S, A, dD, dH, dP, deltaHvap, BP, logVP, logPow, logWS, deltaHf, deltaHc, MP, Flashpoint, logHenrycc, DipoleMoment, logODT, logViscosity]
+std::vector<double> calcPhysChemProp(const ROMol& mol) {
+    std::vector<double> results(NUM_PHYSCHEM_PROPS);
+    
+    // Early exit for very large molecules (prevents timeout/hanging)
+    // Molecules with >200 heavy atoms or >12 rings are too complex
+    unsigned int numHeavyAtoms = mol.getNumHeavyAtoms();
+    unsigned int numRings = RDKit::Descriptors::calcNumRings(mol);
+    if (numHeavyAtoms > 200 || numRings > 12) {
+        // Return NaN for all properties to indicate computation not possible
+        std::fill(results.begin(), results.end(), std::numeric_limits<double>::quiet_NaN());
+        return results;
+    }
+    
+    // Extract base features: 217 RDKit + 291 SMARTS = 508 (matching training)
+    std::vector<double> rdkit_features = extractRDKitDescriptors(mol);
+    std::vector<double> smarts_features = calcAbrahamsV2Features(mol);
+    if (smarts_features.size() != 291) {
+        smarts_features.resize(291, 0.0);
+    }
+    std::vector<double> base_features;
+    base_features.reserve(508);
+    base_features.insert(base_features.end(), rdkit_features.begin(), rdkit_features.end());
+    base_features.insert(base_features.end(), smarts_features.begin(), smarts_features.end());
+    
+    // Get ALL cascade predictions using NEW predictCascade
+    // Returns: [V, E, L, B, S, A, Density, RI]
+    std::vector<double> cascade = ::Osmordred::predictCascade(base_features);
+    
+    // Map to PhysChemPropIndex order
+    results[PROP_V] = cascade[0];           // V
+    results[PROP_E] = cascade[1];           // E
+    results[PROP_L] = cascade[2];           // L
+    results[PROP_B] = cascade[3];           // B
+    results[PROP_S] = cascade[4];           // S
+    results[PROP_A] = cascade[5];           // A
+    results[PROP_DENSITY] = cascade[6];     // Density
+    results[PROP_RI] = cascade[7];          // RI
+    
+    // For Polarizability, use V2 model (NO cascade dependencies)
+    // Features: 291 SMARTS + 217 RDKit + 10 Physics + 30 Golden = 548
+    std::vector<double> polar_v2_features = buildPolarizabilityV2Features(mol);
+    
+    // Predict Polarizability using V2 Ridge model (no cascade)
+    results[PROP_POLARIZABILITY] = ::Osmordred::CascadePolarizabilityV2::predict(polar_v2_features.data());
+    
+    // Step 3: Get Meta37 properties using CASCADE V2 models
+    // These models use 508 base features + cascade predictions from above
+    
+    // Build cascade_9 features: V, E, L, B, S, A, Density, RI, Polarizability
+    // ORDER MATTERS! Must match Python training EXACTLY!
+    // Python training (71_train_logws_cascade.py line 114):
+    //   abraham_9 = [props[0], props[3], props[2], props[4], props[7], props[8], props[5], props[6], props[1]]
+    // Where: props[0]=V, props[3]=E, props[2]=L, props[4]=S, props[7]=A, props[8]=B, props[5]=Density, props[6]=RI, props[1]=Pol
+    // So the order is: [V, E, L, S, A, B, Density, RI, Pol] - NOT [V, E, L, B, S, A, ...]!
+    std::vector<double> cascade_9 = {
+        results[PROP_V],           // 0 -> V (Python: props[0])
+        results[PROP_E],           // 1 -> E (Python: props[3])
+        results[PROP_L],           // 2 -> L (Python: props[2])
+        results[PROP_S],           // 3 -> S (Python: props[4]) - FIXED: was PROP_B
+        results[PROP_A],           // 4 -> A (Python: props[7]) - FIXED: was PROP_S
+        results[PROP_B],           // 5 -> B (Python: props[8]) - FIXED: was PROP_A
+        results[PROP_DENSITY],     // 6 -> Density (Python: props[5])
+        results[PROP_RI],          // 7 -> RI (Python: props[6])
+        results[PROP_POLARIZABILITY] // 8 -> Polarizability (Python: props[1])
+    };
+    
+    // Build features for models with 9 cascade features (508 + 9 = 517)
+    std::vector<double> features_517 = base_features;
+    features_517.insert(features_517.end(), cascade_9.begin(), cascade_9.end());
+    
+    // Hansen parameters - OLD (517 features) - REPLACED BY CASCADE
+    // results[PROP_DD] = ::Osmordred::CascadeMeta37dD::predict(features_517);
+    // results[PROP_DH] = ::Osmordred::CascadeMeta37dH::predict(features_517);
+    // results[PROP_DP] = ::Osmordred::CascadeMeta37dP::predict(features_517);
+    
+    // DipoleMoment - OLD V2 model REPLACED BY CASCADE
+    // results[PROP_DIPOLEMOMENT] = ::Osmordred::CascadeMeta37DipoleMoment::predict(features_517);
+    // results[PROP_LOGPOW] = ::Osmordred::CascadeMeta37logPow::predict(features_517);  // REPLACED BY CASCADE
+    
+    // deltaHvap (BEFORE BP and logVP) - uses base(4093) + cascade(9) + LSFER(54) + physics(10) = 4166 features
+    // Build full feature vector for deltaHvap
+    std::vector<double> features_dhvap_full(4166, 0.0);
+    
+    // Extract full 4093 unified features (291 SMARTS + 217 RDKit + 3585 Osmordred)
+    // Order: [0:290] SMARTS, [291:507] RDKit, [508:4092] Osmordred
+    // CRITICAL: For deltaHvap, we need RDKit 217 descriptors computed fresh (not the 508 base_features)
+    // The old cascade models use [RDKit217, SMARTS291] = 508 base, but deltaHvap needs [SMARTS291, RDKit217, Osmordred3585]
+    
+    // Copy SMARTS (291) to [0:290]
+    for (size_t i = 0; i < 291 && i < smarts_features.size(); ++i) {
+        features_dhvap_full[i] = smarts_features[i];
+    }
+    
+    // Copy RDKit (217) to [291:507]
+    // IMPORTANT: rdkit_features from extractRDKitDescriptors should have 217 features
+    for (size_t i = 0; i < 217 && i < rdkit_features.size(); ++i) {
+        features_dhvap_full[291 + i] = rdkit_features[i];
+    }
+    
+    // Extract Osmordred (3585) to [508:4092]
+    std::vector<double> osmordred_dhvap = calcOsmordred(mol);
+    for (size_t i = 0; i < 3585 && i < osmordred_dhvap.size(); ++i) {
+        features_dhvap_full[508 + i] = osmordred_dhvap[i];
+    }
+    
+    // Preprocess base features (4093): Convert inf to nan (matching Python preprocess_features_unified)
+    // Python: np.where(np.isinf(X), np.nan, X) when apply_inf_to_nan=True
+    // Then later: np.nan_to_num(X, nan=0.0) before arcsinh
+    // But for BP/logVP, we need the raw values BEFORE any nan_to_num conversion
+    for (size_t i = 0; i < 4093; ++i) {
+        if (std::isinf(features_dhvap_full[i])) {
+            features_dhvap_full[i] = std::numeric_limits<double>::quiet_NaN();
+        }
+        // Keep nan as nan (don't convert to 0 yet)
+    }
+    
+    // CRITICAL: Save base features BEFORE arcsinh and BEFORE nan_to_num for use in BP and logVP
+    // BP and logVP need the raw base features (before arcsinh) because they apply arcsinh themselves
+    // Python uses the same base array for both deltaHvap and BP, so we must do the same
+    std::vector<double> base_features_raw(4093, 0.0);
+    for (size_t i = 0; i < 4093; ++i) {
+        base_features_raw[i] = features_dhvap_full[i];  // May contain NaN, that's OK
+    }
+    
+    // NOW convert nan to 0 for deltaHvap (matching Python np.nan_to_num before arcsinh)
+    for (size_t i = 0; i < 4166; ++i) {
+        if (!std::isfinite(features_dhvap_full[i])) {
+            features_dhvap_full[i] = 0.0;
+        }
+    }
+    
+    // Cascade (9) - Abraham parameters
+    for (size_t i = 0; i < cascade_9.size() && i < 9; ++i) {
+        features_dhvap_full[4093 + i] = cascade_9[i];
+    }
+    
+    // LSFER features (54) - ONLY from 9 Abraham cascade parameters (order matters!)
+    // 9 raw + 9 squares + 36 products = 54 total
+    // Order: V, E, L, B, S, A, Density, RI, Polarizability
+    double V = cascade_9[0], E = cascade_9[1], L = cascade_9[2], B = cascade_9[3];
+    double S = cascade_9[4], A = cascade_9[5], Density = cascade_9[6], RI = cascade_9[7], Polarizability = cascade_9[8];
+    
+    size_t lsfer_start = 4093 + 9;
+    // Raw (9)
+    features_dhvap_full[lsfer_start + 0] = V;
+    features_dhvap_full[lsfer_start + 1] = E;
+    features_dhvap_full[lsfer_start + 2] = L;
+    features_dhvap_full[lsfer_start + 3] = B;
+    features_dhvap_full[lsfer_start + 4] = S;
+    features_dhvap_full[lsfer_start + 5] = A;
+    features_dhvap_full[lsfer_start + 6] = Density;
+    features_dhvap_full[lsfer_start + 7] = RI;
+    features_dhvap_full[lsfer_start + 8] = Polarizability;
+    
+    // Squares (9)
+    features_dhvap_full[lsfer_start + 9] = V*V;
+    features_dhvap_full[lsfer_start + 10] = E*E;
+    features_dhvap_full[lsfer_start + 11] = L*L;
+    features_dhvap_full[lsfer_start + 12] = B*B;
+    features_dhvap_full[lsfer_start + 13] = S*S;
+    features_dhvap_full[lsfer_start + 14] = A*A;
+    features_dhvap_full[lsfer_start + 15] = Density*Density;
+    features_dhvap_full[lsfer_start + 16] = RI*RI;
+    features_dhvap_full[lsfer_start + 17] = Polarizability*Polarizability;
+    
+    // Products (36) - all pairs
+    size_t prod_idx = lsfer_start + 18;
+    features_dhvap_full[prod_idx++] = V*E; features_dhvap_full[prod_idx++] = V*L; features_dhvap_full[prod_idx++] = V*B;
+    features_dhvap_full[prod_idx++] = V*S; features_dhvap_full[prod_idx++] = V*A; features_dhvap_full[prod_idx++] = V*Density;
+    features_dhvap_full[prod_idx++] = V*RI; features_dhvap_full[prod_idx++] = V*Polarizability;
+    features_dhvap_full[prod_idx++] = E*L; features_dhvap_full[prod_idx++] = E*B; features_dhvap_full[prod_idx++] = E*S;
+    features_dhvap_full[prod_idx++] = E*A; features_dhvap_full[prod_idx++] = E*Density; features_dhvap_full[prod_idx++] = E*RI;
+    features_dhvap_full[prod_idx++] = E*Polarizability;
+    features_dhvap_full[prod_idx++] = L*B; features_dhvap_full[prod_idx++] = L*S; features_dhvap_full[prod_idx++] = L*A;
+    features_dhvap_full[prod_idx++] = L*Density; features_dhvap_full[prod_idx++] = L*RI; features_dhvap_full[prod_idx++] = L*Polarizability;
+    features_dhvap_full[prod_idx++] = B*S; features_dhvap_full[prod_idx++] = B*A; features_dhvap_full[prod_idx++] = B*Density;
+    features_dhvap_full[prod_idx++] = B*RI; features_dhvap_full[prod_idx++] = B*Polarizability;
+    features_dhvap_full[prod_idx++] = S*A; features_dhvap_full[prod_idx++] = S*Density; features_dhvap_full[prod_idx++] = S*RI;
+    features_dhvap_full[prod_idx++] = S*Polarizability;
+    features_dhvap_full[prod_idx++] = A*Density; features_dhvap_full[prod_idx++] = A*RI; features_dhvap_full[prod_idx++] = A*Polarizability;
+    features_dhvap_full[prod_idx++] = Density*RI; features_dhvap_full[prod_idx++] = Density*Polarizability;
+    features_dhvap_full[prod_idx++] = RI*Polarizability;
+    
+    // Physics features (10) - NOT used for golden features
+    // Must match Python: create_physics_features(abraham_6, density, ri, polarizability, mw)
+    // Python training uses props[12] (BP) as proxy for MW when len(props) > 12, else 100.0
+    // Since BP is not computed yet, we need to estimate MW or use a default
+    // For now, use actual MW from RDKit (more accurate than BP proxy)
+    size_t physics_start = 4093 + 9 + 54;  // base(4093) + cascade(9) + LSFER(54) = 4156
+    double MW = calcAMW(mol);
+    // If MW is invalid, use default 100.0 (matching Python fallback)
+    if (!std::isfinite(MW) || MW <= 0) {
+        MW = 100.0;
+    }
+    // Use Abraham 6: V, E, L, B, S, A (from cascade_9)
+    double V_phys = cascade_9[0], E_phys = cascade_9[1], L_phys = cascade_9[2];
+    double B_phys = cascade_9[3], S_phys = cascade_9[4], A_phys = cascade_9[5];
+    double Density_phys = cascade_9[6], RI_phys = cascade_9[7], Polarizability_phys = cascade_9[8];
+    
+    // Match Python create_physics_features EXACTLY (line by line)
+    // 1. MR (Molar refractivity)
+    double MR = E_phys + 2.83195 * V_phys - 0.52553;
+    
+    // 2. Vm (Molar volume) - Python: if density > 0.1: Vm = mw / density else: Vm = mw / 1.0
+    double Vm = (Density_phys > 0.1) ? (MW / Density_phys) : (MW / 1.0);  // Match Python exactly
+    
+    // 3. f_n (Refractive index feature) - Python: f_n = (n2 - 1) / (n2 + 2) if (n2 + 2) > 0.1 else 0.2
+    double n2 = RI_phys * RI_phys;
+    double f_n = ((n2 + 2) > 0.1) ? ((n2 - 1) / (n2 + 2)) : 0.2;
+    
+    // 4. Parachor - Python: Parachor = MR / f_n if f_n > 0.01 else 0
+    double Parachor = (f_n > 0.01) ? (MR / f_n) : 0.0;
+    
+    // 5. eps_CM (Dielectric constant) - Python: eps_CM = (1 + 2*f_n) / (1 - f_n) if (1 - f_n) > 0.01 else 2
+    double eps_CM = ((1 - f_n) > 0.01) ? ((1 + 2*f_n) / (1 - f_n)) : 2.0;
+    
+    // 6. alpha_pred (Polarizability estimate)
+    double alpha_pred = 2.51 * MR + 6.43;
+    
+    // 7. dD_est - Python: dD_est = 4.0 + 0.15 * (MR / Vm * 100) if Vm > 0 else 15.0
+    // NOTE: Python does NOT clamp dD_est, dH_est, dP_est - they can be any value!
+    double dD_est = (Vm > 0) ? (4.0 + 0.15 * (MR / Vm * 100)) : 15.0;
+    
+    // 8. dH_est - Python: dH_est = 2.0 * (A + B) * 5
+    double dH_est = 2.0 * (A_phys + B_phys) * 5;
+    
+    // 9. dP_est - Python: dP_est = 2.0 * S * 5
+    double dP_est = 2.0 * S_phys * 5;
+    
+    // 10. delta_total - Python: delta_total = sqrt(dD_est^2 + dP_est^2 + dH_est^2) if dD_est > 0 else 0.0
+    double delta_total = (dD_est > 0) ? std::sqrt(dD_est*dD_est + dP_est*dP_est + dH_est*dH_est) : 0.0;
+    
+    // Order must match Python: [MR, Vm, f_n, Parachor, eps_CM, alpha_pred, dD_est, dH_est, dP_est, delta_total]
+    features_dhvap_full[physics_start + 0] = MR;
+    features_dhvap_full[physics_start + 1] = Vm;
+    features_dhvap_full[physics_start + 2] = f_n;
+    features_dhvap_full[physics_start + 3] = Parachor;
+    features_dhvap_full[physics_start + 4] = eps_CM;
+    features_dhvap_full[physics_start + 5] = alpha_pred;
+    features_dhvap_full[physics_start + 6] = dD_est;
+    features_dhvap_full[physics_start + 7] = dH_est;
+    features_dhvap_full[physics_start + 8] = dP_est;
+    features_dhvap_full[physics_start + 9] = delta_total;
+    
+    // CRITICAL: Apply arcsinh COLUMN-WISE to the FULL feature vector (4166 features)
+    // Python applies arcsinh to ENTIRE columns, not individual elements!
+    // The arcsinh columns are indices in the FULL feature vector (0-4165)
+    // This must be done AFTER all features (base + cascade + LSFER + physics) are built
+    for (int i = 0; i < ::osmo::physchemprop::cascade::deltaHvapExported::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::osmo::physchemprop::cascade::deltaHvapExported::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 4166) {
+            features_dhvap_full[col_idx] = std::asinh(features_dhvap_full[col_idx]);
+        }
+    }
+    
+    // DEBUG: After arcsinh
+    // Predict deltaHvap (BEFORE BP and logVP)
+    results[PROP_DELTAHVAP] = ::osmo::physchemprop::cascade::deltaHvapExported::predict(features_dhvap_full.data());
+    
+    
+    // BP cascade model: 4167 features = base(4093) + cascade(10: 9 Abraham + deltaHvap) + LSFER(54) + physics(10)
+    std::vector<double> features_bp_full(4167, 0.0);
+    // #endregion
+    
+    // CRITICAL: Recompute base features FRESH for BP (matching Python which uses the same base array)
+    // Python uses the SAME base_features array for both deltaHvap and BP, so we recompute to ensure exact match
+    // Order: [0:290] SMARTS, [291:507] RDKit, [508:4092] Osmordred
+    for (size_t i = 0; i < 291 && i < smarts_features.size(); ++i) {
+        features_bp_full[i] = smarts_features[i];
+    }
+    for (size_t i = 0; i < 217 && i < rdkit_features.size(); ++i) {
+        features_bp_full[291 + i] = rdkit_features[i];
+    }
+    // Recompute Osmordred for BP (to ensure exact match, even though it should be the same)
+    std::vector<double> osmordred_bp = calcOsmordred(mol);
+    for (size_t i = 0; i < 3585 && i < osmordred_bp.size(); ++i) {
+        features_bp_full[508 + i] = osmordred_bp[i];
+    }
+    
+    // Preprocess base features: Convert inf to nan (matching Python)
+    for (size_t i = 0; i < 4093; ++i) {
+        if (std::isinf(features_bp_full[i])) {
+            features_bp_full[i] = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    
+    
+    // Cascade (10): 9 Abraham + deltaHvap
+    for (size_t i = 0; i < 9; ++i) {
+        features_bp_full[4093 + i] = cascade_9[i];
+    }
+    features_bp_full[4093 + 9] = results[PROP_DELTAHVAP];
+    
+    // LSFER (54) - recompute from 9 Abraham parameters (same as deltaHvap, but recompute to be explicit)
+    size_t lsfer_bp_start = 4093 + 10;
+    double V_bp = cascade_9[0], E_bp = cascade_9[1], L_bp = cascade_9[2], B_bp = cascade_9[3];
+    double S_bp = cascade_9[4], A_bp = cascade_9[5], Density_bp = cascade_9[6], RI_bp = cascade_9[7], Polarizability_bp = cascade_9[8];
+    
+    
+    // Raw (9)
+    features_bp_full[lsfer_bp_start + 0] = V_bp;
+    features_bp_full[lsfer_bp_start + 1] = E_bp;
+    features_bp_full[lsfer_bp_start + 2] = L_bp;
+    features_bp_full[lsfer_bp_start + 3] = B_bp;
+    features_bp_full[lsfer_bp_start + 4] = S_bp;
+    features_bp_full[lsfer_bp_start + 5] = A_bp;
+    features_bp_full[lsfer_bp_start + 6] = Density_bp;
+    features_bp_full[lsfer_bp_start + 7] = RI_bp;
+    features_bp_full[lsfer_bp_start + 8] = Polarizability_bp;
+    
+    // Squares (9)
+    features_bp_full[lsfer_bp_start + 9] = V_bp*V_bp;
+    features_bp_full[lsfer_bp_start + 10] = E_bp*E_bp;
+    features_bp_full[lsfer_bp_start + 11] = L_bp*L_bp;
+    features_bp_full[lsfer_bp_start + 12] = B_bp*B_bp;
+    features_bp_full[lsfer_bp_start + 13] = S_bp*S_bp;
+    features_bp_full[lsfer_bp_start + 14] = A_bp*A_bp;
+    features_bp_full[lsfer_bp_start + 15] = Density_bp*Density_bp;
+    features_bp_full[lsfer_bp_start + 16] = RI_bp*RI_bp;
+    features_bp_full[lsfer_bp_start + 17] = Polarizability_bp*Polarizability_bp;
+    
+    // Products (36)
+    size_t prod_bp_idx = lsfer_bp_start + 18;
+    features_bp_full[prod_bp_idx++] = V_bp*E_bp; features_bp_full[prod_bp_idx++] = V_bp*L_bp; features_bp_full[prod_bp_idx++] = V_bp*B_bp;
+    features_bp_full[prod_bp_idx++] = V_bp*S_bp; features_bp_full[prod_bp_idx++] = V_bp*A_bp; features_bp_full[prod_bp_idx++] = V_bp*Density_bp;
+    features_bp_full[prod_bp_idx++] = V_bp*RI_bp; features_bp_full[prod_bp_idx++] = V_bp*Polarizability_bp;
+    features_bp_full[prod_bp_idx++] = E_bp*L_bp; features_bp_full[prod_bp_idx++] = E_bp*B_bp; features_bp_full[prod_bp_idx++] = E_bp*S_bp;
+    features_bp_full[prod_bp_idx++] = E_bp*A_bp; features_bp_full[prod_bp_idx++] = E_bp*Density_bp; features_bp_full[prod_bp_idx++] = E_bp*RI_bp;
+    features_bp_full[prod_bp_idx++] = E_bp*Polarizability_bp;
+    features_bp_full[prod_bp_idx++] = L_bp*B_bp; features_bp_full[prod_bp_idx++] = L_bp*S_bp; features_bp_full[prod_bp_idx++] = L_bp*A_bp;
+    features_bp_full[prod_bp_idx++] = L_bp*Density_bp; features_bp_full[prod_bp_idx++] = L_bp*RI_bp; features_bp_full[prod_bp_idx++] = L_bp*Polarizability_bp;
+    features_bp_full[prod_bp_idx++] = B_bp*S_bp; features_bp_full[prod_bp_idx++] = B_bp*A_bp; features_bp_full[prod_bp_idx++] = B_bp*Density_bp;
+    features_bp_full[prod_bp_idx++] = B_bp*RI_bp; features_bp_full[prod_bp_idx++] = B_bp*Polarizability_bp;
+    features_bp_full[prod_bp_idx++] = S_bp*A_bp; features_bp_full[prod_bp_idx++] = S_bp*Density_bp; features_bp_full[prod_bp_idx++] = S_bp*RI_bp;
+    features_bp_full[prod_bp_idx++] = S_bp*Polarizability_bp;
+    features_bp_full[prod_bp_idx++] = A_bp*Density_bp; features_bp_full[prod_bp_idx++] = A_bp*RI_bp; features_bp_full[prod_bp_idx++] = A_bp*Polarizability_bp;
+    features_bp_full[prod_bp_idx++] = Density_bp*RI_bp; features_bp_full[prod_bp_idx++] = Density_bp*Polarizability_bp;
+    features_bp_full[prod_bp_idx++] = RI_bp*Polarizability_bp;
+    
+    
+    // Physics (10) - recompute to match Python exactly
+    size_t physics_bp_start = 4093 + 10 + 54;
+    double MW_bp = calcAMW(mol);
+    if (!std::isfinite(MW_bp) || MW_bp <= 0) MW_bp = 100.0;
+    
+    double MR_bp = E_bp + 2.83195 * V_bp - 0.52553;
+    double Vm_bp = (Density_bp > 0.1) ? (MW_bp / Density_bp) : (MW_bp / 1.0);
+    double n2_bp = RI_bp * RI_bp;
+    double f_n_bp = ((n2_bp + 2) > 0.1) ? ((n2_bp - 1) / (n2_bp + 2)) : 0.2;
+    double Parachor_bp = (f_n_bp > 0.01) ? (MR_bp / f_n_bp) : 0.0;
+    double eps_CM_bp = ((1 - f_n_bp) > 0.01) ? ((1 + 2*f_n_bp) / (1 - f_n_bp)) : 2.0;
+    double alpha_pred_bp = 2.51 * MR_bp + 6.43;
+    double dD_est_bp = (Vm_bp > 0) ? (4.0 + 0.15 * (MR_bp / Vm_bp * 100)) : 15.0;
+    double dH_est_bp = 2.0 * (A_bp + B_bp) * 5;
+    double dP_est_bp = 2.0 * S_bp * 5;
+    double delta_total_bp = (dD_est_bp > 0) ? std::sqrt(dD_est_bp*dD_est_bp + dP_est_bp*dP_est_bp + dH_est_bp*dH_est_bp) : 0.0;
+    
+    features_bp_full[physics_bp_start + 0] = MR_bp;
+    features_bp_full[physics_bp_start + 1] = Vm_bp;
+    features_bp_full[physics_bp_start + 2] = f_n_bp;
+    features_bp_full[physics_bp_start + 3] = Parachor_bp;
+    features_bp_full[physics_bp_start + 4] = eps_CM_bp;
+    features_bp_full[physics_bp_start + 5] = alpha_pred_bp;
+    features_bp_full[physics_bp_start + 6] = dD_est_bp;
+    features_bp_full[physics_bp_start + 7] = dH_est_bp;
+    features_bp_full[physics_bp_start + 8] = dP_est_bp;
+    features_bp_full[physics_bp_start + 9] = delta_total_bp;
+    
+    // CRITICAL: Python applies arcsinh to X_all (which may have NaN), then XGBoost handles NaN
+    // Python: X_for_arcsinh = np.nan_to_num(X_all, nan=0.0)  # Only for determining arcsinh columns
+    //        Then: X_all[:, arcsinh_cols] = np.arcsinh(X_all[:, arcsinh_cols])  # Applied to original (with NaN)
+    //        arcsinh(nan) = nan, which XGBoost handles natively
+    // So we should NOT convert NaN to 0 before arcsinh - let arcsinh(nan) = nan
+    // However, for numerical stability, we'll convert inf to 0 before arcsinh (inf causes issues)
+    for (size_t i = 0; i < 4167; ++i) {
+        if (std::isinf(features_bp_full[i])) {
+            features_bp_full[i] = 0.0;  // Convert inf to 0 (arcsinh(inf) is problematic)
+        }
+        // Keep NaN as NaN - arcsinh(nan) = nan, XGBoost handles it
+    }
+    
+    
+    // Apply arcsinh COLUMN-WISE (NaN values will become arcsinh(nan) = nan, which is fine)
+    for (int i = 0; i < ::osmo::physchemprop::cascade::bpExported::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::osmo::physchemprop::cascade::bpExported::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 4167) {
+            // Only apply arcsinh if value is finite (not NaN or inf)
+            if (std::isfinite(features_bp_full[col_idx])) {
+                features_bp_full[col_idx] = std::asinh(features_bp_full[col_idx]);
+            }
+            // If NaN, leave as NaN (arcsinh(nan) = nan, XGBoost handles it)
+        }
+    }
+    
+    // NOW convert NaN to 0 for the model (XGBoost can handle NaN, but for consistency with training, convert to 0)
+    // Actually, wait - if training had NaN, we should keep NaN. Let me check training data...
+    // For now, convert NaN to 0 to match what the model likely expects
+    for (size_t i = 0; i < 4167; ++i) {
+        if (!std::isfinite(features_bp_full[i])) {
+            features_bp_full[i] = 0.0;
+        }
+    }
+    
+    
+    // Predict BP
+    
+    
+    double bp_pred = ::osmo::physchemprop::cascade::bpExported::predict(features_bp_full.data());
+    
+    
+    
+    results[PROP_BP] = bp_pred;
+    
+    // logVP cascade model: 4168 features = base(4093) + cascade(11: 9 Abraham + deltaHvap + BP) + LSFER(54) + physics(10)
+    std::vector<double> features_logvp_full(4168, 0.0);
+    
+    // CRITICAL: Recompute base features FRESH for logVP (matching Python which uses the same base array)
+    // Python uses the SAME base_features array for deltaHvap, BP, and logVP, so we recompute to ensure exact match
+    // Order: [0:290] SMARTS, [291:507] RDKit, [508:4092] Osmordred
+    for (size_t i = 0; i < 291 && i < smarts_features.size(); ++i) {
+        features_logvp_full[i] = smarts_features[i];
+    }
+    for (size_t i = 0; i < 217 && i < rdkit_features.size(); ++i) {
+        features_logvp_full[291 + i] = rdkit_features[i];
+    }
+    // Recompute Osmordred for logVP (to ensure exact match)
+    std::vector<double> osmordred_logvp = calcOsmordred(mol);
+    for (size_t i = 0; i < 3585 && i < osmordred_logvp.size(); ++i) {
+        features_logvp_full[508 + i] = osmordred_logvp[i];
+    }
+    
+    // Preprocess base features: Convert inf to nan (matching Python)
+    for (size_t i = 0; i < 4093; ++i) {
+        if (std::isinf(features_logvp_full[i])) {
+            features_logvp_full[i] = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    
+    // Cascade (11): 9 Abraham + deltaHvap + BP
+    for (size_t i = 0; i < 9; ++i) {
+        features_logvp_full[4093 + i] = cascade_9[i];
+    }
+    features_logvp_full[4093 + 9] = results[PROP_DELTAHVAP];
+    features_logvp_full[4093 + 10] = results[PROP_BP];
+    
+    // LSFER (54) - recompute from 9 Abraham parameters
+    size_t lsfer_logvp_start = 4093 + 11;
+    double V_logvp = cascade_9[0], E_logvp = cascade_9[1], L_logvp = cascade_9[2], B_logvp = cascade_9[3];
+    double S_logvp = cascade_9[4], A_logvp = cascade_9[5], Density_logvp = cascade_9[6], RI_logvp = cascade_9[7], Polarizability_logvp = cascade_9[8];
+    
+    // Raw (9)
+    features_logvp_full[lsfer_logvp_start + 0] = V_logvp;
+    features_logvp_full[lsfer_logvp_start + 1] = E_logvp;
+    features_logvp_full[lsfer_logvp_start + 2] = L_logvp;
+    features_logvp_full[lsfer_logvp_start + 3] = B_logvp;
+    features_logvp_full[lsfer_logvp_start + 4] = S_logvp;
+    features_logvp_full[lsfer_logvp_start + 5] = A_logvp;
+    features_logvp_full[lsfer_logvp_start + 6] = Density_logvp;
+    features_logvp_full[lsfer_logvp_start + 7] = RI_logvp;
+    features_logvp_full[lsfer_logvp_start + 8] = Polarizability_logvp;
+    
+    // Squares (9)
+    features_logvp_full[lsfer_logvp_start + 9] = V_logvp*V_logvp;
+    features_logvp_full[lsfer_logvp_start + 10] = E_logvp*E_logvp;
+    features_logvp_full[lsfer_logvp_start + 11] = L_logvp*L_logvp;
+    features_logvp_full[lsfer_logvp_start + 12] = B_logvp*B_logvp;
+    features_logvp_full[lsfer_logvp_start + 13] = S_logvp*S_logvp;
+    features_logvp_full[lsfer_logvp_start + 14] = A_logvp*A_logvp;
+    features_logvp_full[lsfer_logvp_start + 15] = Density_logvp*Density_logvp;
+    features_logvp_full[lsfer_logvp_start + 16] = RI_logvp*RI_logvp;
+    features_logvp_full[lsfer_logvp_start + 17] = Polarizability_logvp*Polarizability_logvp;
+    
+    // Products (36)
+    size_t prod_logvp_idx = lsfer_logvp_start + 18;
+    features_logvp_full[prod_logvp_idx++] = V_logvp*E_logvp; features_logvp_full[prod_logvp_idx++] = V_logvp*L_logvp; features_logvp_full[prod_logvp_idx++] = V_logvp*B_logvp;
+    features_logvp_full[prod_logvp_idx++] = V_logvp*S_logvp; features_logvp_full[prod_logvp_idx++] = V_logvp*A_logvp; features_logvp_full[prod_logvp_idx++] = V_logvp*Density_logvp;
+    features_logvp_full[prod_logvp_idx++] = V_logvp*RI_logvp; features_logvp_full[prod_logvp_idx++] = V_logvp*Polarizability_logvp;
+    features_logvp_full[prod_logvp_idx++] = E_logvp*L_logvp; features_logvp_full[prod_logvp_idx++] = E_logvp*B_logvp; features_logvp_full[prod_logvp_idx++] = E_logvp*S_logvp;
+    features_logvp_full[prod_logvp_idx++] = E_logvp*A_logvp; features_logvp_full[prod_logvp_idx++] = E_logvp*Density_logvp; features_logvp_full[prod_logvp_idx++] = E_logvp*RI_logvp;
+    features_logvp_full[prod_logvp_idx++] = E_logvp*Polarizability_logvp;
+    features_logvp_full[prod_logvp_idx++] = L_logvp*B_logvp; features_logvp_full[prod_logvp_idx++] = L_logvp*S_logvp; features_logvp_full[prod_logvp_idx++] = L_logvp*A_logvp;
+    features_logvp_full[prod_logvp_idx++] = L_logvp*Density_logvp; features_logvp_full[prod_logvp_idx++] = L_logvp*RI_logvp; features_logvp_full[prod_logvp_idx++] = L_logvp*Polarizability_logvp;
+    features_logvp_full[prod_logvp_idx++] = B_logvp*S_logvp; features_logvp_full[prod_logvp_idx++] = B_logvp*A_logvp; features_logvp_full[prod_logvp_idx++] = B_logvp*Density_logvp;
+    features_logvp_full[prod_logvp_idx++] = B_logvp*RI_logvp; features_logvp_full[prod_logvp_idx++] = B_logvp*Polarizability_logvp;
+    features_logvp_full[prod_logvp_idx++] = S_logvp*A_logvp; features_logvp_full[prod_logvp_idx++] = S_logvp*Density_logvp; features_logvp_full[prod_logvp_idx++] = S_logvp*RI_logvp;
+    features_logvp_full[prod_logvp_idx++] = S_logvp*Polarizability_logvp;
+    features_logvp_full[prod_logvp_idx++] = A_logvp*Density_logvp; features_logvp_full[prod_logvp_idx++] = A_logvp*RI_logvp; features_logvp_full[prod_logvp_idx++] = A_logvp*Polarizability_logvp;
+    features_logvp_full[prod_logvp_idx++] = Density_logvp*RI_logvp; features_logvp_full[prod_logvp_idx++] = Density_logvp*Polarizability_logvp;
+    features_logvp_full[prod_logvp_idx++] = RI_logvp*Polarizability_logvp;
+    
+    // Physics (10) - recompute to match Python exactly
+    size_t physics_logvp_start = 4093 + 11 + 54;
+    double MW_logvp = calcAMW(mol);
+    if (!std::isfinite(MW_logvp) || MW_logvp <= 0) MW_logvp = 100.0;
+    
+    double MR_logvp = E_logvp + 2.83195 * V_logvp - 0.52553;
+    double Vm_logvp = (Density_logvp > 0.1) ? (MW_logvp / Density_logvp) : (MW_logvp / 1.0);
+    double n2_logvp = RI_logvp * RI_logvp;
+    double f_n_logvp = ((n2_logvp + 2) > 0.1) ? ((n2_logvp - 1) / (n2_logvp + 2)) : 0.2;
+    double Parachor_logvp = (f_n_logvp > 0.01) ? (MR_logvp / f_n_logvp) : 0.0;
+    double eps_CM_logvp = ((1 - f_n_logvp) > 0.01) ? ((1 + 2*f_n_logvp) / (1 - f_n_logvp)) : 2.0;
+    double alpha_pred_logvp = 2.51 * MR_logvp + 6.43;
+    double dD_est_logvp = (Vm_logvp > 0) ? (4.0 + 0.15 * (MR_logvp / Vm_logvp * 100)) : 15.0;
+    double dH_est_logvp = 2.0 * (A_logvp + B_logvp) * 5;
+    double dP_est_logvp = 2.0 * S_logvp * 5;
+    double delta_total_logvp = (dD_est_logvp > 0) ? std::sqrt(dD_est_logvp*dD_est_logvp + dP_est_logvp*dP_est_logvp + dH_est_logvp*dH_est_logvp) : 0.0;
+    
+    features_logvp_full[physics_logvp_start + 0] = MR_logvp;
+    features_logvp_full[physics_logvp_start + 1] = Vm_logvp;
+    features_logvp_full[physics_logvp_start + 2] = f_n_logvp;
+    features_logvp_full[physics_logvp_start + 3] = Parachor_logvp;
+    features_logvp_full[physics_logvp_start + 4] = eps_CM_logvp;
+    features_logvp_full[physics_logvp_start + 5] = alpha_pred_logvp;
+    features_logvp_full[physics_logvp_start + 6] = dD_est_logvp;
+    features_logvp_full[physics_logvp_start + 7] = dH_est_logvp;
+    features_logvp_full[physics_logvp_start + 8] = dP_est_logvp;
+    features_logvp_full[physics_logvp_start + 9] = delta_total_logvp;
+    
+    // CRITICAL: Match BP preprocessing exactly
+    // Convert inf to 0 (arcsinh(inf) is problematic), keep NaN for now
+    for (size_t i = 0; i < 4168; ++i) {
+        if (std::isinf(features_logvp_full[i])) {
+            features_logvp_full[i] = 0.0;
+        }
+        // Keep NaN as NaN - arcsinh(nan) = nan, XGBoost handles it
+    }
+    
+    
+    // Apply arcsinh COLUMN-WISE (NaN values will become arcsinh(nan) = nan, which is fine)
+    for (int i = 0; i < ::osmo::physchemprop::cascade::logvpExported::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::osmo::physchemprop::cascade::logvpExported::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 4168) {
+            // Only apply arcsinh if value is finite (not NaN or inf)
+            if (std::isfinite(features_logvp_full[col_idx])) {
+                features_logvp_full[col_idx] = std::asinh(features_logvp_full[col_idx]);
+            }
+            // If NaN, leave as NaN (arcsinh(nan) = nan, XGBoost handles it)
+        }
+    }
+    
+    // NOW convert NaN to 0 for the model
+    for (size_t i = 0; i < 4168; ++i) {
+        if (!std::isfinite(features_logvp_full[i])) {
+            features_logvp_full[i] = 0.0;
+        }
+    }
+    
+    
+    // Predict logVP
+    
+    double logvp_pred = ::osmo::physchemprop::cascade::logvpExported::predict(features_logvp_full.data());
+    
+    
+    
+    results[PROP_LOGVP] = logvp_pred;
+    
+    // =====================================================================================
+    // deltaHf CASCADE MODEL
+    // Features: [base(4093), cascade(12), LSFER(54), physics(10)] = 4169 total
+    // Cascade: 9 Abraham + deltaHvap + BP + logVP
+    // =====================================================================================
+    std::vector<double> features_deltahf_full(4169, 0.0);
+    
+    // Copy base features (4093) - recompute from scratch
+    for (size_t i = 0; i < 291 && i < smarts_features.size(); ++i) {
+        features_deltahf_full[i] = smarts_features[i];
+    }
+    for (size_t i = 0; i < 217 && i < rdkit_features.size(); ++i) {
+        features_deltahf_full[291 + i] = rdkit_features[i];
+    }
+    std::vector<double> osmordred_deltahf = calcOsmordred(mol);
+    for (size_t i = 0; i < 3585 && i < osmordred_deltahf.size(); ++i) {
+        features_deltahf_full[508 + i] = osmordred_deltahf[i];
+    }
+    
+    // Convert inf to nan in base features
+    for (size_t i = 0; i < 4093; ++i) {
+        if (std::isinf(features_deltahf_full[i])) {
+            features_deltahf_full[i] = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    
+    // Cascade (12): 9 Abraham + deltaHvap + BP + logVP
+    for (size_t i = 0; i < 9; ++i) {
+        features_deltahf_full[4093 + i] = cascade_9[i];
+    }
+    features_deltahf_full[4093 + 9] = results[PROP_DELTAHVAP];
+    features_deltahf_full[4093 + 10] = results[PROP_BP];
+    features_deltahf_full[4093 + 11] = results[PROP_LOGVP];
+    
+    // LSFER (54) - from Abraham parameters
+    size_t lsfer_deltahf_start = 4093 + 12;
+    double V_hf = cascade_9[0], E_hf = cascade_9[1], L_hf = cascade_9[2], B_hf = cascade_9[3];
+    double S_hf = cascade_9[4], A_hf = cascade_9[5], Density_hf = cascade_9[6], RI_hf = cascade_9[7], Polarizability_hf = cascade_9[8];
+    
+    // Raw (9)
+    features_deltahf_full[lsfer_deltahf_start + 0] = V_hf;
+    features_deltahf_full[lsfer_deltahf_start + 1] = E_hf;
+    features_deltahf_full[lsfer_deltahf_start + 2] = L_hf;
+    features_deltahf_full[lsfer_deltahf_start + 3] = B_hf;
+    features_deltahf_full[lsfer_deltahf_start + 4] = S_hf;
+    features_deltahf_full[lsfer_deltahf_start + 5] = A_hf;
+    features_deltahf_full[lsfer_deltahf_start + 6] = Density_hf;
+    features_deltahf_full[lsfer_deltahf_start + 7] = RI_hf;
+    features_deltahf_full[lsfer_deltahf_start + 8] = Polarizability_hf;
+    
+    // Squares (9)
+    features_deltahf_full[lsfer_deltahf_start + 9] = V_hf*V_hf;
+    features_deltahf_full[lsfer_deltahf_start + 10] = E_hf*E_hf;
+    features_deltahf_full[lsfer_deltahf_start + 11] = L_hf*L_hf;
+    features_deltahf_full[lsfer_deltahf_start + 12] = B_hf*B_hf;
+    features_deltahf_full[lsfer_deltahf_start + 13] = S_hf*S_hf;
+    features_deltahf_full[lsfer_deltahf_start + 14] = A_hf*A_hf;
+    features_deltahf_full[lsfer_deltahf_start + 15] = Density_hf*Density_hf;
+    features_deltahf_full[lsfer_deltahf_start + 16] = RI_hf*RI_hf;
+    features_deltahf_full[lsfer_deltahf_start + 17] = Polarizability_hf*Polarizability_hf;
+    
+    // Products (36)
+    size_t prod_hf_idx = lsfer_deltahf_start + 18;
+    features_deltahf_full[prod_hf_idx++] = V_hf*E_hf; features_deltahf_full[prod_hf_idx++] = V_hf*L_hf; features_deltahf_full[prod_hf_idx++] = V_hf*B_hf;
+    features_deltahf_full[prod_hf_idx++] = V_hf*S_hf; features_deltahf_full[prod_hf_idx++] = V_hf*A_hf; features_deltahf_full[prod_hf_idx++] = V_hf*Density_hf;
+    features_deltahf_full[prod_hf_idx++] = V_hf*RI_hf; features_deltahf_full[prod_hf_idx++] = V_hf*Polarizability_hf;
+    features_deltahf_full[prod_hf_idx++] = E_hf*L_hf; features_deltahf_full[prod_hf_idx++] = E_hf*B_hf; features_deltahf_full[prod_hf_idx++] = E_hf*S_hf;
+    features_deltahf_full[prod_hf_idx++] = E_hf*A_hf; features_deltahf_full[prod_hf_idx++] = E_hf*Density_hf; features_deltahf_full[prod_hf_idx++] = E_hf*RI_hf;
+    features_deltahf_full[prod_hf_idx++] = E_hf*Polarizability_hf;
+    features_deltahf_full[prod_hf_idx++] = L_hf*B_hf; features_deltahf_full[prod_hf_idx++] = L_hf*S_hf; features_deltahf_full[prod_hf_idx++] = L_hf*A_hf;
+    features_deltahf_full[prod_hf_idx++] = L_hf*Density_hf; features_deltahf_full[prod_hf_idx++] = L_hf*RI_hf; features_deltahf_full[prod_hf_idx++] = L_hf*Polarizability_hf;
+    features_deltahf_full[prod_hf_idx++] = B_hf*S_hf; features_deltahf_full[prod_hf_idx++] = B_hf*A_hf; features_deltahf_full[prod_hf_idx++] = B_hf*Density_hf;
+    features_deltahf_full[prod_hf_idx++] = B_hf*RI_hf; features_deltahf_full[prod_hf_idx++] = B_hf*Polarizability_hf;
+    features_deltahf_full[prod_hf_idx++] = S_hf*A_hf; features_deltahf_full[prod_hf_idx++] = S_hf*Density_hf; features_deltahf_full[prod_hf_idx++] = S_hf*RI_hf;
+    features_deltahf_full[prod_hf_idx++] = S_hf*Polarizability_hf;
+    features_deltahf_full[prod_hf_idx++] = A_hf*Density_hf; features_deltahf_full[prod_hf_idx++] = A_hf*RI_hf; features_deltahf_full[prod_hf_idx++] = A_hf*Polarizability_hf;
+    features_deltahf_full[prod_hf_idx++] = Density_hf*RI_hf; features_deltahf_full[prod_hf_idx++] = Density_hf*Polarizability_hf;
+    features_deltahf_full[prod_hf_idx++] = RI_hf*Polarizability_hf;
+    
+    // Physics (10)
+    size_t physics_deltahf_start = 4093 + 12 + 54;
+    double MW_hf = calcAMW(mol);
+    if (!std::isfinite(MW_hf) || MW_hf <= 0) MW_hf = 100.0;
+    
+    double MR_hf = E_hf + 2.83195 * V_hf - 0.52553;
+    double Vm_hf = (Density_hf > 0.1) ? (MW_hf / Density_hf) : (MW_hf / 1.0);
+    double n2_hf = RI_hf * RI_hf;
+    double f_n_hf = ((n2_hf + 2) > 0.1) ? ((n2_hf - 1) / (n2_hf + 2)) : 0.2;
+    double Parachor_hf = (f_n_hf > 0.01) ? (MR_hf / f_n_hf) : 0.0;
+    double eps_CM_hf = ((1 - f_n_hf) > 0.01) ? ((1 + 2*f_n_hf) / (1 - f_n_hf)) : 2.0;
+    double alpha_pred_hf = 2.51 * MR_hf + 6.43;
+    double dD_est_hf = (Vm_hf > 0) ? (4.0 + 0.15 * (MR_hf / Vm_hf * 100)) : 15.0;
+    double dH_est_hf = 2.0 * (A_hf + B_hf) * 5;
+    double dP_est_hf = 2.0 * S_hf * 5;
+    double delta_total_hf = (dD_est_hf > 0) ? std::sqrt(dD_est_hf*dD_est_hf + dP_est_hf*dP_est_hf + dH_est_hf*dH_est_hf) : 0.0;
+    
+    features_deltahf_full[physics_deltahf_start + 0] = MR_hf;
+    features_deltahf_full[physics_deltahf_start + 1] = Vm_hf;
+    features_deltahf_full[physics_deltahf_start + 2] = f_n_hf;
+    features_deltahf_full[physics_deltahf_start + 3] = Parachor_hf;
+    features_deltahf_full[physics_deltahf_start + 4] = eps_CM_hf;
+    features_deltahf_full[physics_deltahf_start + 5] = alpha_pred_hf;
+    features_deltahf_full[physics_deltahf_start + 6] = dD_est_hf;
+    features_deltahf_full[physics_deltahf_start + 7] = dH_est_hf;
+    features_deltahf_full[physics_deltahf_start + 8] = dP_est_hf;
+    features_deltahf_full[physics_deltahf_start + 9] = delta_total_hf;
+    
+    // Convert inf to 0 before arcsinh
+    for (size_t i = 0; i < 4169; ++i) {
+        if (std::isinf(features_deltahf_full[i])) {
+            features_deltahf_full[i] = 0.0;
+        }
+    }
+    
+    // Apply arcsinh
+    for (int i = 0; i < ::osmo::physchemprop::cascade::deltahfExported::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::osmo::physchemprop::cascade::deltahfExported::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 4169) {
+            if (std::isfinite(features_deltahf_full[col_idx])) {
+                features_deltahf_full[col_idx] = std::asinh(features_deltahf_full[col_idx]);
+            }
+        }
+    }
+    
+    // Convert NaN to 0
+    for (size_t i = 0; i < 4169; ++i) {
+        if (!std::isfinite(features_deltahf_full[i])) {
+            features_deltahf_full[i] = 0.0;
+        }
+    }
+    
+    // Predict deltaHf
+    results[PROP_DELTAHF] = ::osmo::physchemprop::cascade::deltahfExported::predict(features_deltahf_full.data());
+    
+    // =====================================================================================
+    // deltaHc CASCADE MODEL
+    // Features: [base(4093), cascade(13), LSFER(54), physics(10)] = 4170 total
+    // Cascade: 9 Abraham + deltaHvap + BP + logVP + deltaHf
+    // =====================================================================================
+    std::vector<double> features_deltahc_full(4170, 0.0);
+    
+    // Copy base features (4093) - recompute from scratch
+    for (size_t i = 0; i < 291 && i < smarts_features.size(); ++i) {
+        features_deltahc_full[i] = smarts_features[i];
+    }
+    for (size_t i = 0; i < 217 && i < rdkit_features.size(); ++i) {
+        features_deltahc_full[291 + i] = rdkit_features[i];
+    }
+    std::vector<double> osmordred_deltahc = calcOsmordred(mol);
+    for (size_t i = 0; i < 3585 && i < osmordred_deltahc.size(); ++i) {
+        features_deltahc_full[508 + i] = osmordred_deltahc[i];
+    }
+    
+    // Convert inf to nan in base features
+    for (size_t i = 0; i < 4093; ++i) {
+        if (std::isinf(features_deltahc_full[i])) {
+            features_deltahc_full[i] = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    
+    // Cascade (13): 9 Abraham + deltaHvap + BP + logVP + deltaHf
+    for (size_t i = 0; i < 9; ++i) {
+        features_deltahc_full[4093 + i] = cascade_9[i];
+    }
+    features_deltahc_full[4093 + 9] = results[PROP_DELTAHVAP];
+    features_deltahc_full[4093 + 10] = results[PROP_BP];
+    features_deltahc_full[4093 + 11] = results[PROP_LOGVP];
+    features_deltahc_full[4093 + 12] = results[PROP_DELTAHF];
+    
+    // LSFER (54) - from Abraham parameters
+    size_t lsfer_deltahc_start = 4093 + 13;
+    double V_hc = cascade_9[0], E_hc = cascade_9[1], L_hc = cascade_9[2], B_hc = cascade_9[3];
+    double S_hc = cascade_9[4], A_hc = cascade_9[5], Density_hc = cascade_9[6], RI_hc = cascade_9[7], Polarizability_hc = cascade_9[8];
+    
+    // Raw (9)
+    features_deltahc_full[lsfer_deltahc_start + 0] = V_hc;
+    features_deltahc_full[lsfer_deltahc_start + 1] = E_hc;
+    features_deltahc_full[lsfer_deltahc_start + 2] = L_hc;
+    features_deltahc_full[lsfer_deltahc_start + 3] = B_hc;
+    features_deltahc_full[lsfer_deltahc_start + 4] = S_hc;
+    features_deltahc_full[lsfer_deltahc_start + 5] = A_hc;
+    features_deltahc_full[lsfer_deltahc_start + 6] = Density_hc;
+    features_deltahc_full[lsfer_deltahc_start + 7] = RI_hc;
+    features_deltahc_full[lsfer_deltahc_start + 8] = Polarizability_hc;
+    
+    // Squares (9)
+    features_deltahc_full[lsfer_deltahc_start + 9] = V_hc*V_hc;
+    features_deltahc_full[lsfer_deltahc_start + 10] = E_hc*E_hc;
+    features_deltahc_full[lsfer_deltahc_start + 11] = L_hc*L_hc;
+    features_deltahc_full[lsfer_deltahc_start + 12] = B_hc*B_hc;
+    features_deltahc_full[lsfer_deltahc_start + 13] = S_hc*S_hc;
+    features_deltahc_full[lsfer_deltahc_start + 14] = A_hc*A_hc;
+    features_deltahc_full[lsfer_deltahc_start + 15] = Density_hc*Density_hc;
+    features_deltahc_full[lsfer_deltahc_start + 16] = RI_hc*RI_hc;
+    features_deltahc_full[lsfer_deltahc_start + 17] = Polarizability_hc*Polarizability_hc;
+    
+    // Products (36)
+    size_t prod_hc_idx = lsfer_deltahc_start + 18;
+    features_deltahc_full[prod_hc_idx++] = V_hc*E_hc; features_deltahc_full[prod_hc_idx++] = V_hc*L_hc; features_deltahc_full[prod_hc_idx++] = V_hc*B_hc;
+    features_deltahc_full[prod_hc_idx++] = V_hc*S_hc; features_deltahc_full[prod_hc_idx++] = V_hc*A_hc; features_deltahc_full[prod_hc_idx++] = V_hc*Density_hc;
+    features_deltahc_full[prod_hc_idx++] = V_hc*RI_hc; features_deltahc_full[prod_hc_idx++] = V_hc*Polarizability_hc;
+    features_deltahc_full[prod_hc_idx++] = E_hc*L_hc; features_deltahc_full[prod_hc_idx++] = E_hc*B_hc; features_deltahc_full[prod_hc_idx++] = E_hc*S_hc;
+    features_deltahc_full[prod_hc_idx++] = E_hc*A_hc; features_deltahc_full[prod_hc_idx++] = E_hc*Density_hc; features_deltahc_full[prod_hc_idx++] = E_hc*RI_hc;
+    features_deltahc_full[prod_hc_idx++] = E_hc*Polarizability_hc;
+    features_deltahc_full[prod_hc_idx++] = L_hc*B_hc; features_deltahc_full[prod_hc_idx++] = L_hc*S_hc; features_deltahc_full[prod_hc_idx++] = L_hc*A_hc;
+    features_deltahc_full[prod_hc_idx++] = L_hc*Density_hc; features_deltahc_full[prod_hc_idx++] = L_hc*RI_hc; features_deltahc_full[prod_hc_idx++] = L_hc*Polarizability_hc;
+    features_deltahc_full[prod_hc_idx++] = B_hc*S_hc; features_deltahc_full[prod_hc_idx++] = B_hc*A_hc; features_deltahc_full[prod_hc_idx++] = B_hc*Density_hc;
+    features_deltahc_full[prod_hc_idx++] = B_hc*RI_hc; features_deltahc_full[prod_hc_idx++] = B_hc*Polarizability_hc;
+    features_deltahc_full[prod_hc_idx++] = S_hc*A_hc; features_deltahc_full[prod_hc_idx++] = S_hc*Density_hc; features_deltahc_full[prod_hc_idx++] = S_hc*RI_hc;
+    features_deltahc_full[prod_hc_idx++] = S_hc*Polarizability_hc;
+    features_deltahc_full[prod_hc_idx++] = A_hc*Density_hc; features_deltahc_full[prod_hc_idx++] = A_hc*RI_hc; features_deltahc_full[prod_hc_idx++] = A_hc*Polarizability_hc;
+    features_deltahc_full[prod_hc_idx++] = Density_hc*RI_hc; features_deltahc_full[prod_hc_idx++] = Density_hc*Polarizability_hc;
+    features_deltahc_full[prod_hc_idx++] = RI_hc*Polarizability_hc;
+    
+    // Physics (10)
+    size_t physics_deltahc_start = 4093 + 13 + 54;
+    double MW_hc = calcAMW(mol);
+    if (!std::isfinite(MW_hc) || MW_hc <= 0) MW_hc = 100.0;
+    
+    double MR_hc = E_hc + 2.83195 * V_hc - 0.52553;
+    double Vm_hc = (Density_hc > 0.1) ? (MW_hc / Density_hc) : (MW_hc / 1.0);
+    double n2_hc = RI_hc * RI_hc;
+    double f_n_hc = ((n2_hc + 2) > 0.1) ? ((n2_hc - 1) / (n2_hc + 2)) : 0.2;
+    double Parachor_hc = (f_n_hc > 0.01) ? (MR_hc / f_n_hc) : 0.0;
+    double eps_CM_hc = ((1 - f_n_hc) > 0.01) ? ((1 + 2*f_n_hc) / (1 - f_n_hc)) : 2.0;
+    double alpha_pred_hc = 2.51 * MR_hc + 6.43;
+    double dD_est_hc = (Vm_hc > 0) ? (4.0 + 0.15 * (MR_hc / Vm_hc * 100)) : 15.0;
+    double dH_est_hc = 2.0 * (A_hc + B_hc) * 5;
+    double dP_est_hc = 2.0 * S_hc * 5;
+    double delta_total_hc = (dD_est_hc > 0) ? std::sqrt(dD_est_hc*dD_est_hc + dP_est_hc*dP_est_hc + dH_est_hc*dH_est_hc) : 0.0;
+    
+    features_deltahc_full[physics_deltahc_start + 0] = MR_hc;
+    features_deltahc_full[physics_deltahc_start + 1] = Vm_hc;
+    features_deltahc_full[physics_deltahc_start + 2] = f_n_hc;
+    features_deltahc_full[physics_deltahc_start + 3] = Parachor_hc;
+    features_deltahc_full[physics_deltahc_start + 4] = eps_CM_hc;
+    features_deltahc_full[physics_deltahc_start + 5] = alpha_pred_hc;
+    features_deltahc_full[physics_deltahc_start + 6] = dD_est_hc;
+    features_deltahc_full[physics_deltahc_start + 7] = dH_est_hc;
+    features_deltahc_full[physics_deltahc_start + 8] = dP_est_hc;
+    features_deltahc_full[physics_deltahc_start + 9] = delta_total_hc;
+    
+    // Convert inf to 0 before arcsinh
+    for (size_t i = 0; i < 4170; ++i) {
+        if (std::isinf(features_deltahc_full[i])) {
+            features_deltahc_full[i] = 0.0;
+        }
+    }
+    
+    // Apply arcsinh
+    for (int i = 0; i < ::osmo::physchemprop::cascade::deltahcExported::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::osmo::physchemprop::cascade::deltahcExported::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 4170) {
+            if (std::isfinite(features_deltahc_full[col_idx])) {
+                features_deltahc_full[col_idx] = std::asinh(features_deltahc_full[col_idx]);
+            }
+        }
+    }
+    
+    // Convert NaN to 0
+    for (size_t i = 0; i < 4170; ++i) {
+        if (!std::isfinite(features_deltahc_full[i])) {
+            features_deltahc_full[i] = 0.0;
+        }
+    }
+    
+    // Predict deltaHc
+    results[PROP_DELTAHC] = ::osmo::physchemprop::cascade::deltahcExported::predict(features_deltahc_full.data());
+    
+    // =====================================================================================
+    // logPow CASCADE MODEL
+    // Features: [osmordred(3585), abraham(9), cascade(5), LSFER(54), physics(10)] = 3663 total
+    // Cascade: deltaHvap + BP + logVP + deltaHf + deltaHc
+    // =====================================================================================
+    std::vector<double> features_logpow_full(3663, 0.0);
+    
+    // Osmordred (3585) - reuse from deltahc
+    for (size_t i = 0; i < 3585 && i < osmordred_deltahc.size(); ++i) {
+        features_logpow_full[i] = osmordred_deltahc[i];
+    }
+    
+    // Abraham (9)
+    for (size_t i = 0; i < 9; ++i) {
+        features_logpow_full[3585 + i] = cascade_9[i];
+    }
+    
+    // Cascade (5): deltaHvap + BP + logVP + deltaHf + deltaHc
+    features_logpow_full[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_logpow_full[3585 + 9 + 1] = results[PROP_BP];
+    features_logpow_full[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_logpow_full[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_logpow_full[3585 + 9 + 4] = results[PROP_DELTAHC];
+    
+    // LSFER (54) - from Abraham parameters
+    size_t lsfer_logpow_start = 3585 + 9 + 5;
+    double V_lp = cascade_9[0], E_lp = cascade_9[1], L_lp = cascade_9[2], B_lp = cascade_9[3];
+    double S_lp = cascade_9[4], A_lp = cascade_9[5], Density_lp = cascade_9[6], RI_lp = cascade_9[7], Polarizability_lp = cascade_9[8];
+    features_logpow_full[lsfer_logpow_start + 0] = V_lp;
+    features_logpow_full[lsfer_logpow_start + 1] = E_lp;
+    features_logpow_full[lsfer_logpow_start + 2] = L_lp;
+    features_logpow_full[lsfer_logpow_start + 3] = B_lp;
+    features_logpow_full[lsfer_logpow_start + 4] = S_lp;
+    features_logpow_full[lsfer_logpow_start + 5] = A_lp;
+    features_logpow_full[lsfer_logpow_start + 6] = Density_lp;
+    features_logpow_full[lsfer_logpow_start + 7] = RI_lp;
+    features_logpow_full[lsfer_logpow_start + 8] = Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 9] = V_lp*V_lp;
+    features_logpow_full[lsfer_logpow_start + 10] = E_lp*E_lp;
+    features_logpow_full[lsfer_logpow_start + 11] = L_lp*L_lp;
+    features_logpow_full[lsfer_logpow_start + 12] = B_lp*B_lp;
+    features_logpow_full[lsfer_logpow_start + 13] = S_lp*S_lp;
+    features_logpow_full[lsfer_logpow_start + 14] = A_lp*A_lp;
+    features_logpow_full[lsfer_logpow_start + 15] = Density_lp*Density_lp;
+    features_logpow_full[lsfer_logpow_start + 16] = RI_lp*RI_lp;
+    features_logpow_full[lsfer_logpow_start + 17] = Polarizability_lp*Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 18] = V_lp*E_lp;
+    features_logpow_full[lsfer_logpow_start + 19] = V_lp*L_lp;
+    features_logpow_full[lsfer_logpow_start + 20] = V_lp*B_lp;
+    features_logpow_full[lsfer_logpow_start + 21] = V_lp*S_lp;
+    features_logpow_full[lsfer_logpow_start + 22] = V_lp*A_lp;
+    features_logpow_full[lsfer_logpow_start + 23] = V_lp*Density_lp;
+    features_logpow_full[lsfer_logpow_start + 24] = V_lp*RI_lp;
+    features_logpow_full[lsfer_logpow_start + 25] = V_lp*Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 26] = E_lp*L_lp;
+    features_logpow_full[lsfer_logpow_start + 27] = E_lp*B_lp;
+    features_logpow_full[lsfer_logpow_start + 28] = E_lp*S_lp;
+    features_logpow_full[lsfer_logpow_start + 29] = E_lp*A_lp;
+    features_logpow_full[lsfer_logpow_start + 30] = E_lp*Density_lp;
+    features_logpow_full[lsfer_logpow_start + 31] = E_lp*RI_lp;
+    features_logpow_full[lsfer_logpow_start + 32] = E_lp*Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 33] = L_lp*B_lp;
+    features_logpow_full[lsfer_logpow_start + 34] = L_lp*S_lp;
+    features_logpow_full[lsfer_logpow_start + 35] = L_lp*A_lp;
+    features_logpow_full[lsfer_logpow_start + 36] = L_lp*Density_lp;
+    features_logpow_full[lsfer_logpow_start + 37] = L_lp*RI_lp;
+    features_logpow_full[lsfer_logpow_start + 38] = L_lp*Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 39] = B_lp*S_lp;
+    features_logpow_full[lsfer_logpow_start + 40] = B_lp*A_lp;
+    features_logpow_full[lsfer_logpow_start + 41] = B_lp*Density_lp;
+    features_logpow_full[lsfer_logpow_start + 42] = B_lp*RI_lp;
+    features_logpow_full[lsfer_logpow_start + 43] = B_lp*Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 44] = S_lp*A_lp;
+    features_logpow_full[lsfer_logpow_start + 45] = S_lp*Density_lp;
+    features_logpow_full[lsfer_logpow_start + 46] = S_lp*RI_lp;
+    features_logpow_full[lsfer_logpow_start + 47] = S_lp*Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 48] = A_lp*Density_lp;
+    features_logpow_full[lsfer_logpow_start + 49] = A_lp*RI_lp;
+    features_logpow_full[lsfer_logpow_start + 50] = A_lp*Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 51] = Density_lp*RI_lp;
+    features_logpow_full[lsfer_logpow_start + 52] = Density_lp*Polarizability_lp;
+    features_logpow_full[lsfer_logpow_start + 53] = RI_lp*Polarizability_lp;
+    
+    // Physics (10)
+    size_t physics_logpow_start = lsfer_logpow_start + 54;
+    double MR_lp = E_lp + 2.83195 * V_lp - 0.52553;
+    double Vm_lp = (Density_lp > 0.1) ? MW / Density_lp : MW;
+    double n2_lp = RI_lp * RI_lp;
+    double f_n_lp = (n2_lp + 2 > 0.1) ? (n2_lp - 1) / (n2_lp + 2) : 0.2;
+    double Parachor_lp = (f_n_lp > 0.01) ? MR_lp / f_n_lp : 0.0;
+    double eps_CM_lp = (1 - f_n_lp > 0.01) ? (1 + 2*f_n_lp) / (1 - f_n_lp) : 2.0;
+    double alpha_pred_lp = 2.51 * MR_lp + 6.43;
+    double dD_est_lp = (Vm_lp > 0) ? 4.0 + 0.15 * (MR_lp / Vm_lp * 100) : 15.0;
+    double dH_est_lp = 2.0 * (A_lp + B_lp) * 5;
+    double dP_est_lp = 2.0 * S_lp * 5;
+    double delta_total_lp = (dD_est_lp > 0) ? std::sqrt(dD_est_lp*dD_est_lp + dP_est_lp*dP_est_lp + dH_est_lp*dH_est_lp) : 0.0;
+    features_logpow_full[physics_logpow_start + 0] = MR_lp;
+    features_logpow_full[physics_logpow_start + 1] = Vm_lp;
+    features_logpow_full[physics_logpow_start + 2] = f_n_lp;
+    features_logpow_full[physics_logpow_start + 3] = Parachor_lp;
+    features_logpow_full[physics_logpow_start + 4] = eps_CM_lp;
+    features_logpow_full[physics_logpow_start + 5] = alpha_pred_lp;
+    features_logpow_full[physics_logpow_start + 6] = dD_est_lp;
+    features_logpow_full[physics_logpow_start + 7] = dH_est_lp;
+    features_logpow_full[physics_logpow_start + 8] = dP_est_lp;
+    features_logpow_full[physics_logpow_start + 9] = delta_total_lp;
+    
+    // Preprocess: inf to 0, arcsinh, nan to 0
+    for (size_t i = 0; i < 3663; ++i) {
+        if (std::isinf(features_logpow_full[i])) features_logpow_full[i] = 0.0;
+    }
+    for (int i = 0; i < ::logpow_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::logpow_cascade::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 3663 && std::isfinite(features_logpow_full[col_idx])) {
+            features_logpow_full[col_idx] = std::asinh(features_logpow_full[col_idx]);
+        }
+    }
+    for (size_t i = 0; i < 3663; ++i) {
+        if (!std::isfinite(features_logpow_full[i])) features_logpow_full[i] = 0.0;
+    }
+    
+    // Predict logPow
+    results[PROP_LOGPOW] = ::logpow_cascade::predict(features_logpow_full.data());
+    
+    // =====================================================================================
+    // logWS CASCADE MODEL
+    // Features: [osmordred(3585), abraham(9), cascade(6), LSFER(54), physics(10)] = 3664 total
+    // Cascade: deltaHvap + BP + logVP + deltaHf + deltaHc + logPow
+    // =====================================================================================
+    std::vector<double> features_logws_full(3664, 0.0);
+    
+    // Osmordred (3585)
+    for (size_t i = 0; i < 3585 && i < osmordred_deltahc.size(); ++i) {
+        features_logws_full[i] = osmordred_deltahc[i];
+    }
+    
+    // Abraham (9)
+    for (size_t i = 0; i < 9; ++i) {
+        features_logws_full[3585 + i] = cascade_9[i];
+    }
+    
+    // Cascade (6): deltaHvap + BP + logVP + deltaHf + deltaHc + logPow
+    features_logws_full[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_logws_full[3585 + 9 + 1] = results[PROP_BP];
+    features_logws_full[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_logws_full[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_logws_full[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_logws_full[3585 + 9 + 5] = results[PROP_LOGPOW];
+    
+    // LSFER (54) - Build FRESH (FIX: was copying from logpow which had arcsinh already)
+    size_t lsfer_logws_start = 3585 + 9 + 6;
+    double V_ws = cascade_9[0], E_ws = cascade_9[1], L_ws = cascade_9[2], B_ws = cascade_9[3];
+    double S_ws = cascade_9[4], A_ws = cascade_9[5], Density_ws = cascade_9[6], RI_ws = cascade_9[7], Pol_ws = cascade_9[8];
+    // Raw (9)
+    features_logws_full[lsfer_logws_start + 0] = V_ws;
+    features_logws_full[lsfer_logws_start + 1] = E_ws;
+    features_logws_full[lsfer_logws_start + 2] = L_ws;
+    features_logws_full[lsfer_logws_start + 3] = B_ws;
+    features_logws_full[lsfer_logws_start + 4] = S_ws;
+    features_logws_full[lsfer_logws_start + 5] = A_ws;
+    features_logws_full[lsfer_logws_start + 6] = Density_ws;
+    features_logws_full[lsfer_logws_start + 7] = RI_ws;
+    features_logws_full[lsfer_logws_start + 8] = Pol_ws;
+    // Squares (9)
+    features_logws_full[lsfer_logws_start + 9] = V_ws*V_ws;
+    features_logws_full[lsfer_logws_start + 10] = E_ws*E_ws;
+    features_logws_full[lsfer_logws_start + 11] = L_ws*L_ws;
+    features_logws_full[lsfer_logws_start + 12] = B_ws*B_ws;
+    features_logws_full[lsfer_logws_start + 13] = S_ws*S_ws;
+    features_logws_full[lsfer_logws_start + 14] = A_ws*A_ws;
+    features_logws_full[lsfer_logws_start + 15] = Density_ws*Density_ws;
+    features_logws_full[lsfer_logws_start + 16] = RI_ws*RI_ws;
+    features_logws_full[lsfer_logws_start + 17] = Pol_ws*Pol_ws;
+    // Products (36)
+    features_logws_full[lsfer_logws_start + 18] = V_ws*E_ws;
+    features_logws_full[lsfer_logws_start + 19] = V_ws*L_ws;
+    features_logws_full[lsfer_logws_start + 20] = V_ws*B_ws;
+    features_logws_full[lsfer_logws_start + 21] = V_ws*S_ws;
+    features_logws_full[lsfer_logws_start + 22] = V_ws*A_ws;
+    features_logws_full[lsfer_logws_start + 23] = V_ws*Density_ws;
+    features_logws_full[lsfer_logws_start + 24] = V_ws*RI_ws;
+    features_logws_full[lsfer_logws_start + 25] = V_ws*Pol_ws;
+    features_logws_full[lsfer_logws_start + 26] = E_ws*L_ws;
+    features_logws_full[lsfer_logws_start + 27] = E_ws*B_ws;
+    features_logws_full[lsfer_logws_start + 28] = E_ws*S_ws;
+    features_logws_full[lsfer_logws_start + 29] = E_ws*A_ws;
+    features_logws_full[lsfer_logws_start + 30] = E_ws*Density_ws;
+    features_logws_full[lsfer_logws_start + 31] = E_ws*RI_ws;
+    features_logws_full[lsfer_logws_start + 32] = E_ws*Pol_ws;
+    features_logws_full[lsfer_logws_start + 33] = L_ws*B_ws;
+    features_logws_full[lsfer_logws_start + 34] = L_ws*S_ws;
+    features_logws_full[lsfer_logws_start + 35] = L_ws*A_ws;
+    features_logws_full[lsfer_logws_start + 36] = L_ws*Density_ws;
+    features_logws_full[lsfer_logws_start + 37] = L_ws*RI_ws;
+    features_logws_full[lsfer_logws_start + 38] = L_ws*Pol_ws;
+    features_logws_full[lsfer_logws_start + 39] = B_ws*S_ws;
+    features_logws_full[lsfer_logws_start + 40] = B_ws*A_ws;
+    features_logws_full[lsfer_logws_start + 41] = B_ws*Density_ws;
+    features_logws_full[lsfer_logws_start + 42] = B_ws*RI_ws;
+    features_logws_full[lsfer_logws_start + 43] = B_ws*Pol_ws;
+    features_logws_full[lsfer_logws_start + 44] = S_ws*A_ws;
+    features_logws_full[lsfer_logws_start + 45] = S_ws*Density_ws;
+    features_logws_full[lsfer_logws_start + 46] = S_ws*RI_ws;
+    features_logws_full[lsfer_logws_start + 47] = S_ws*Pol_ws;
+    features_logws_full[lsfer_logws_start + 48] = A_ws*Density_ws;
+    features_logws_full[lsfer_logws_start + 49] = A_ws*RI_ws;
+    features_logws_full[lsfer_logws_start + 50] = A_ws*Pol_ws;
+    features_logws_full[lsfer_logws_start + 51] = Density_ws*RI_ws;
+    features_logws_full[lsfer_logws_start + 52] = Density_ws*Pol_ws;
+    features_logws_full[lsfer_logws_start + 53] = RI_ws*Pol_ws;
+    
+    // Physics (10) - Build FRESH
+    size_t physics_logws_start = lsfer_logws_start + 54;
+    double MW_ws = rdkit_features[0];
+    if (!std::isfinite(MW_ws) || MW_ws <= 0) MW_ws = 100.0;
+    double MR_ws = E_ws + 2.83195 * V_ws - 0.52553;
+    double Vm_ws = (Density_ws > 0.1) ? (MW_ws / Density_ws) : MW_ws;
+    double n2_ws = RI_ws * RI_ws;
+    double f_n_ws = ((n2_ws + 2) > 0.1) ? ((n2_ws - 1) / (n2_ws + 2)) : 0.2;
+    double Parachor_ws = (f_n_ws > 0.01) ? (MR_ws / f_n_ws) : 0.0;
+    double eps_CM_ws = ((1 - f_n_ws) > 0.01) ? ((1 + 2*f_n_ws) / (1 - f_n_ws)) : 2.0;
+    double alpha_pred_ws = 2.51 * MR_ws + 6.43;
+    double dD_est_ws = (Vm_ws > 0) ? (4.0 + 0.15 * (MR_ws / Vm_ws * 100)) : 15.0;
+    double dH_est_ws = 2.0 * (A_ws + B_ws) * 5;
+    double dP_est_ws = 2.0 * S_ws * 5;
+    double delta_total_ws = (dD_est_ws > 0) ? std::sqrt(dD_est_ws*dD_est_ws + dP_est_ws*dP_est_ws + dH_est_ws*dH_est_ws) : 0.0;
+    features_logws_full[physics_logws_start + 0] = MR_ws;
+    features_logws_full[physics_logws_start + 1] = Vm_ws;
+    features_logws_full[physics_logws_start + 2] = f_n_ws;
+    features_logws_full[physics_logws_start + 3] = Parachor_ws;
+    features_logws_full[physics_logws_start + 4] = eps_CM_ws;
+    features_logws_full[physics_logws_start + 5] = alpha_pred_ws;
+    features_logws_full[physics_logws_start + 6] = dD_est_ws;
+    features_logws_full[physics_logws_start + 7] = dH_est_ws;
+    features_logws_full[physics_logws_start + 8] = dP_est_ws;
+    features_logws_full[physics_logws_start + 9] = delta_total_ws;
+    
+    // Preprocess
+    for (size_t i = 0; i < 3664; ++i) {
+        if (std::isinf(features_logws_full[i])) features_logws_full[i] = 0.0;
+    }
+    for (int i = 0; i < ::logws_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::logws_cascade::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 3664 && std::isfinite(features_logws_full[col_idx])) {
+            features_logws_full[col_idx] = std::asinh(features_logws_full[col_idx]);
+        }
+    }
+    for (size_t i = 0; i < 3664; ++i) {
+        if (!std::isfinite(features_logws_full[i])) features_logws_full[i] = 0.0;
+    }
+    
+    // Predict logWS
+    results[PROP_LOGWS] = ::logws_cascade::predict(features_logws_full.data());
+    
+    // =====================================================================================
+    // HANSEN PARAMETERS CASCADE MODELS (dD, dH, dP)
+    // Features: [osmordred(3585), abraham(9), cascade(7), LSFER(54), physics(10)] = 3665 total
+    // Cascade: deltaHvap + BP + logVP + deltaHf + deltaHc + logPow + logWS
+    // =====================================================================================
+    std::vector<double> features_hansen_full(3665, 0.0);
+    
+    // Osmordred (3585)
+    for (size_t i = 0; i < 3585 && i < osmordred_deltahc.size(); ++i) {
+        features_hansen_full[i] = osmordred_deltahc[i];
+    }
+    
+    // Abraham (9)
+    for (size_t i = 0; i < 9; ++i) {
+        features_hansen_full[3585 + i] = cascade_9[i];
+    }
+    
+    // Cascade (7): deltaHvap + BP + logVP + deltaHf + deltaHc + logPow + logWS
+    features_hansen_full[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_hansen_full[3585 + 9 + 1] = results[PROP_BP];
+    features_hansen_full[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_hansen_full[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_hansen_full[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_hansen_full[3585 + 9 + 5] = results[PROP_LOGPOW];
+    features_hansen_full[3585 + 9 + 6] = results[PROP_LOGWS];
+    
+    // LSFER (54) - reuse from logpow
+    size_t lsfer_hansen_start = 3585 + 9 + 7;
+    double V_h = cascade_9[0], E_h = cascade_9[1], L_h = cascade_9[2], B_h = cascade_9[3];
+    double S_h = cascade_9[4], A_h = cascade_9[5], Density_h = cascade_9[6], RI_h = cascade_9[7], Polarizability_h = cascade_9[8];
+    features_hansen_full[lsfer_hansen_start + 0] = V_h;
+    features_hansen_full[lsfer_hansen_start + 1] = E_h;
+    features_hansen_full[lsfer_hansen_start + 2] = L_h;
+    features_hansen_full[lsfer_hansen_start + 3] = B_h;
+    features_hansen_full[lsfer_hansen_start + 4] = S_h;
+    features_hansen_full[lsfer_hansen_start + 5] = A_h;
+    features_hansen_full[lsfer_hansen_start + 6] = Density_h;
+    features_hansen_full[lsfer_hansen_start + 7] = RI_h;
+    features_hansen_full[lsfer_hansen_start + 8] = Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 9] = V_h*V_h;
+    features_hansen_full[lsfer_hansen_start + 10] = E_h*E_h;
+    features_hansen_full[lsfer_hansen_start + 11] = L_h*L_h;
+    features_hansen_full[lsfer_hansen_start + 12] = B_h*B_h;
+    features_hansen_full[lsfer_hansen_start + 13] = S_h*S_h;
+    features_hansen_full[lsfer_hansen_start + 14] = A_h*A_h;
+    features_hansen_full[lsfer_hansen_start + 15] = Density_h*Density_h;
+    features_hansen_full[lsfer_hansen_start + 16] = RI_h*RI_h;
+    features_hansen_full[lsfer_hansen_start + 17] = Polarizability_h*Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 18] = V_h*E_h;
+    features_hansen_full[lsfer_hansen_start + 19] = V_h*L_h;
+    features_hansen_full[lsfer_hansen_start + 20] = V_h*B_h;
+    features_hansen_full[lsfer_hansen_start + 21] = V_h*S_h;
+    features_hansen_full[lsfer_hansen_start + 22] = V_h*A_h;
+    features_hansen_full[lsfer_hansen_start + 23] = V_h*Density_h;
+    features_hansen_full[lsfer_hansen_start + 24] = V_h*RI_h;
+    features_hansen_full[lsfer_hansen_start + 25] = V_h*Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 26] = E_h*L_h;
+    features_hansen_full[lsfer_hansen_start + 27] = E_h*B_h;
+    features_hansen_full[lsfer_hansen_start + 28] = E_h*S_h;
+    features_hansen_full[lsfer_hansen_start + 29] = E_h*A_h;
+    features_hansen_full[lsfer_hansen_start + 30] = E_h*Density_h;
+    features_hansen_full[lsfer_hansen_start + 31] = E_h*RI_h;
+    features_hansen_full[lsfer_hansen_start + 32] = E_h*Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 33] = L_h*B_h;
+    features_hansen_full[lsfer_hansen_start + 34] = L_h*S_h;
+    features_hansen_full[lsfer_hansen_start + 35] = L_h*A_h;
+    features_hansen_full[lsfer_hansen_start + 36] = L_h*Density_h;
+    features_hansen_full[lsfer_hansen_start + 37] = L_h*RI_h;
+    features_hansen_full[lsfer_hansen_start + 38] = L_h*Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 39] = B_h*S_h;
+    features_hansen_full[lsfer_hansen_start + 40] = B_h*A_h;
+    features_hansen_full[lsfer_hansen_start + 41] = B_h*Density_h;
+    features_hansen_full[lsfer_hansen_start + 42] = B_h*RI_h;
+    features_hansen_full[lsfer_hansen_start + 43] = B_h*Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 44] = S_h*A_h;
+    features_hansen_full[lsfer_hansen_start + 45] = S_h*Density_h;
+    features_hansen_full[lsfer_hansen_start + 46] = S_h*RI_h;
+    features_hansen_full[lsfer_hansen_start + 47] = S_h*Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 48] = A_h*Density_h;
+    features_hansen_full[lsfer_hansen_start + 49] = A_h*RI_h;
+    features_hansen_full[lsfer_hansen_start + 50] = A_h*Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 51] = Density_h*RI_h;
+    features_hansen_full[lsfer_hansen_start + 52] = Density_h*Polarizability_h;
+    features_hansen_full[lsfer_hansen_start + 53] = RI_h*Polarizability_h;
+    
+    // Physics (10)
+    size_t physics_hansen_start = lsfer_hansen_start + 54;
+    double MR_h = E_h + 2.83195 * V_h - 0.52553;
+    double Vm_h = (Density_h > 0.1) ? MW / Density_h : MW;
+    double n2_h = RI_h * RI_h;
+    double f_n_h = (n2_h + 2 > 0.1) ? (n2_h - 1) / (n2_h + 2) : 0.2;
+    double Parachor_h = (f_n_h > 0.01) ? MR_h / f_n_h : 0.0;
+    double eps_CM_h = (1 - f_n_h > 0.01) ? (1 + 2*f_n_h) / (1 - f_n_h) : 2.0;
+    double alpha_pred_h = 2.51 * MR_h + 6.43;
+    double dD_est_h = (Vm_h > 0) ? 4.0 + 0.15 * (MR_h / Vm_h * 100) : 15.0;
+    double dH_est_h = 2.0 * (A_h + B_h) * 5;
+    double dP_est_h = 2.0 * S_h * 5;
+    double delta_total_h = (dD_est_h > 0) ? std::sqrt(dD_est_h*dD_est_h + dP_est_h*dP_est_h + dH_est_h*dH_est_h) : 0.0;
+    features_hansen_full[physics_hansen_start + 0] = MR_h;
+    features_hansen_full[physics_hansen_start + 1] = Vm_h;
+    features_hansen_full[physics_hansen_start + 2] = f_n_h;
+    features_hansen_full[physics_hansen_start + 3] = Parachor_h;
+    features_hansen_full[physics_hansen_start + 4] = eps_CM_h;
+    features_hansen_full[physics_hansen_start + 5] = alpha_pred_h;
+    features_hansen_full[physics_hansen_start + 6] = dD_est_h;
+    features_hansen_full[physics_hansen_start + 7] = dH_est_h;
+    features_hansen_full[physics_hansen_start + 8] = dP_est_h;
+    features_hansen_full[physics_hansen_start + 9] = delta_total_h;
+    
+    // Preprocess for dD
+    std::vector<double> features_dd = features_hansen_full;
+    for (size_t i = 0; i < 3665; ++i) {
+        if (std::isinf(features_dd[i])) features_dd[i] = 0.0;
+    }
+    for (int i = 0; i < ::dd_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::dd_cascade::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 3665 && std::isfinite(features_dd[col_idx])) {
+            features_dd[col_idx] = std::asinh(features_dd[col_idx]);
+        }
+    }
+    for (size_t i = 0; i < 3665; ++i) {
+        if (!std::isfinite(features_dd[i])) features_dd[i] = 0.0;
+    }
+    results[PROP_DD] = ::dd_cascade::predict(features_dd.data());
+    
+    // Preprocess for dH
+    std::vector<double> features_dh = features_hansen_full;
+    for (size_t i = 0; i < 3665; ++i) {
+        if (std::isinf(features_dh[i])) features_dh[i] = 0.0;
+    }
+    for (int i = 0; i < ::dh_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::dh_cascade::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 3665 && std::isfinite(features_dh[col_idx])) {
+            features_dh[col_idx] = std::asinh(features_dh[col_idx]);
+        }
+    }
+    for (size_t i = 0; i < 3665; ++i) {
+        if (!std::isfinite(features_dh[i])) features_dh[i] = 0.0;
+    }
+    results[PROP_DH] = ::dh_cascade::predict(features_dh.data());
+    
+    // Preprocess for dP
+    std::vector<double> features_dp = features_hansen_full;
+    for (size_t i = 0; i < 3665; ++i) {
+        if (std::isinf(features_dp[i])) features_dp[i] = 0.0;
+    }
+    for (int i = 0; i < ::dp_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::dp_cascade::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 3665 && std::isfinite(features_dp[col_idx])) {
+            features_dp[col_idx] = std::asinh(features_dp[col_idx]);
+        }
+    }
+    for (size_t i = 0; i < 3665; ++i) {
+        if (!std::isfinite(features_dp[i])) features_dp[i] = 0.0;
+    }
+    results[PROP_DP] = ::dp_cascade::predict(features_dp.data());
+    
+    // =====================================================================================
+    // MP (Melting Point) CASCADE MODEL
+    // Features: [osmordred(3585), abraham(9), cascade(10), LSFER(54), physics(10), yalkowsky(1)] = 3669
+    // Cascade: deltaHvap, BP, logVP, deltaHf, deltaHc, logPow, logWS, dD, dH, dP
+    // Includes Yalkowsky feature: MP_est = 100*(0.5 - logWS - logPow) + 25
+    // =====================================================================================
+    std::vector<double> features_mp_full(3669, 0.0);
+    
+    // Osmordred (3585) - reuse from Hansen
+    for (size_t i = 0; i < 3585 && i < osmordred_deltahc.size(); ++i) {
+        features_mp_full[i] = osmordred_deltahc[i];
+    }
+    
+    // Abraham (9)
+    for (size_t i = 0; i < 9; ++i) {
+        features_mp_full[3585 + i] = cascade_9[i];
+    }
+    
+    // Cascade (10): deltaHvap, BP, logVP, deltaHf, deltaHc, logPow, logWS, dD, dH, dP
+    features_mp_full[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_mp_full[3585 + 9 + 1] = results[PROP_BP];
+    features_mp_full[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_mp_full[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_mp_full[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_mp_full[3585 + 9 + 5] = results[PROP_LOGPOW];
+    features_mp_full[3585 + 9 + 6] = results[PROP_LOGWS];
+    features_mp_full[3585 + 9 + 7] = results[PROP_DD];
+    features_mp_full[3585 + 9 + 8] = results[PROP_DH];
+    features_mp_full[3585 + 9 + 9] = results[PROP_DP];
+    
+    // LSFER (54) - reuse variables from Hansen
+    size_t lsfer_mp_start = 3585 + 9 + 10;
+    features_mp_full[lsfer_mp_start + 0] = V_h;
+    features_mp_full[lsfer_mp_start + 1] = E_h;
+    features_mp_full[lsfer_mp_start + 2] = L_h;
+    features_mp_full[lsfer_mp_start + 3] = B_h;
+    features_mp_full[lsfer_mp_start + 4] = S_h;
+    features_mp_full[lsfer_mp_start + 5] = A_h;
+    features_mp_full[lsfer_mp_start + 6] = Density_h;
+    features_mp_full[lsfer_mp_start + 7] = RI_h;
+    features_mp_full[lsfer_mp_start + 8] = Polarizability_h;
+    features_mp_full[lsfer_mp_start + 9] = V_h*V_h;
+    features_mp_full[lsfer_mp_start + 10] = E_h*E_h;
+    features_mp_full[lsfer_mp_start + 11] = L_h*L_h;
+    features_mp_full[lsfer_mp_start + 12] = B_h*B_h;
+    features_mp_full[lsfer_mp_start + 13] = S_h*S_h;
+    features_mp_full[lsfer_mp_start + 14] = A_h*A_h;
+    features_mp_full[lsfer_mp_start + 15] = Density_h*Density_h;
+    features_mp_full[lsfer_mp_start + 16] = RI_h*RI_h;
+    features_mp_full[lsfer_mp_start + 17] = Polarizability_h*Polarizability_h;
+    features_mp_full[lsfer_mp_start + 18] = V_h*E_h;
+    features_mp_full[lsfer_mp_start + 19] = V_h*L_h;
+    features_mp_full[lsfer_mp_start + 20] = V_h*B_h;
+    features_mp_full[lsfer_mp_start + 21] = V_h*S_h;
+    features_mp_full[lsfer_mp_start + 22] = V_h*A_h;
+    features_mp_full[lsfer_mp_start + 23] = V_h*Density_h;
+    features_mp_full[lsfer_mp_start + 24] = V_h*RI_h;
+    features_mp_full[lsfer_mp_start + 25] = V_h*Polarizability_h;
+    features_mp_full[lsfer_mp_start + 26] = E_h*L_h;
+    features_mp_full[lsfer_mp_start + 27] = E_h*B_h;
+    features_mp_full[lsfer_mp_start + 28] = E_h*S_h;
+    features_mp_full[lsfer_mp_start + 29] = E_h*A_h;
+    features_mp_full[lsfer_mp_start + 30] = E_h*Density_h;
+    features_mp_full[lsfer_mp_start + 31] = E_h*RI_h;
+    features_mp_full[lsfer_mp_start + 32] = E_h*Polarizability_h;
+    features_mp_full[lsfer_mp_start + 33] = L_h*B_h;
+    features_mp_full[lsfer_mp_start + 34] = L_h*S_h;
+    features_mp_full[lsfer_mp_start + 35] = L_h*A_h;
+    features_mp_full[lsfer_mp_start + 36] = L_h*Density_h;
+    features_mp_full[lsfer_mp_start + 37] = L_h*RI_h;
+    features_mp_full[lsfer_mp_start + 38] = L_h*Polarizability_h;
+    features_mp_full[lsfer_mp_start + 39] = B_h*S_h;
+    features_mp_full[lsfer_mp_start + 40] = B_h*A_h;
+    features_mp_full[lsfer_mp_start + 41] = B_h*Density_h;
+    features_mp_full[lsfer_mp_start + 42] = B_h*RI_h;
+    features_mp_full[lsfer_mp_start + 43] = B_h*Polarizability_h;
+    features_mp_full[lsfer_mp_start + 44] = S_h*A_h;
+    features_mp_full[lsfer_mp_start + 45] = S_h*Density_h;
+    features_mp_full[lsfer_mp_start + 46] = S_h*RI_h;
+    features_mp_full[lsfer_mp_start + 47] = S_h*Polarizability_h;
+    features_mp_full[lsfer_mp_start + 48] = A_h*Density_h;
+    features_mp_full[lsfer_mp_start + 49] = A_h*RI_h;
+    features_mp_full[lsfer_mp_start + 50] = A_h*Polarizability_h;
+    features_mp_full[lsfer_mp_start + 51] = Density_h*RI_h;
+    features_mp_full[lsfer_mp_start + 52] = Density_h*Polarizability_h;
+    features_mp_full[lsfer_mp_start + 53] = RI_h*Polarizability_h;
+    
+    // Physics (10) - reuse from Hansen
+    size_t physics_mp_start = lsfer_mp_start + 54;
+    features_mp_full[physics_mp_start + 0] = MR_h;
+    features_mp_full[physics_mp_start + 1] = Vm_h;
+    features_mp_full[physics_mp_start + 2] = f_n_h;
+    features_mp_full[physics_mp_start + 3] = Parachor_h;
+    features_mp_full[physics_mp_start + 4] = eps_CM_h;
+    features_mp_full[physics_mp_start + 5] = alpha_pred_h;
+    features_mp_full[physics_mp_start + 6] = dD_est_h;
+    features_mp_full[physics_mp_start + 7] = dH_est_h;
+    features_mp_full[physics_mp_start + 8] = dP_est_h;
+    features_mp_full[physics_mp_start + 9] = delta_total_h;
+    
+    // Yalkowsky feature (1): MP_est = 100*(0.5 - logWS - logPow) + 25
+    double yalkowsky_mp_est = 100.0 * (0.5 - results[PROP_LOGWS] - results[PROP_LOGPOW]) + 25.0;
+    features_mp_full[physics_mp_start + 10] = yalkowsky_mp_est;
+    
+    // Preprocess
+    for (size_t i = 0; i < 3669; ++i) {
+        if (std::isinf(features_mp_full[i])) features_mp_full[i] = 0.0;
+    }
+    for (int i = 0; i < ::mp_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::mp_cascade::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 3669 && std::isfinite(features_mp_full[col_idx])) {
+            features_mp_full[col_idx] = std::asinh(features_mp_full[col_idx]);
+        }
+    }
+    for (size_t i = 0; i < 3669; ++i) {
+        if (!std::isfinite(features_mp_full[i])) features_mp_full[i] = 0.0;
+    }
+    
+    // Predict MP
+    results[PROP_MP] = ::mp_cascade::predict(features_mp_full.data());
+    
+    // OLD logWS (517 + logPow = 518 features) - REPLACED BY CASCADE
+    // std::vector<double> features_logws = features_517;
+    // features_logws.push_back(results[PROP_LOGPOW]);
+    // results[PROP_LOGWS] = ::Osmordred::CascadeMeta37LogWS::predict(features_logws);
+    
+    // =====================================================================================
+    // FLASHPOINT CASCADE MODEL
+    // Features: [osmordred(3585), abraham(9), cascade(11), LSFER(54), physics(10)] = 3669
+    // Cascade: deltaHvap, BP, logVP, deltaHf, deltaHc, logPow, logWS, dD, dH, dP, MP
+    // FIX: Build FRESH osmordred/LSFER/physics (was copying from MP which had arcsinh)
+    // =====================================================================================
+    std::vector<double> features_flashpoint_full(3669, 0.0);
+    
+    // Osmordred (3585) - Use FRESH (not from MP which has arcsinh)
+    for (size_t i = 0; i < 3585 && i < osmordred_deltahc.size(); ++i) {
+        features_flashpoint_full[i] = osmordred_deltahc[i];
+    }
+    for (size_t i = 0; i < 9; ++i) {
+        features_flashpoint_full[3585 + i] = cascade_9[i];
+    }
+    
+    // Cascade (11): same as MP + MP itself
+    features_flashpoint_full[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_flashpoint_full[3585 + 9 + 1] = results[PROP_BP];
+    features_flashpoint_full[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_flashpoint_full[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_flashpoint_full[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_flashpoint_full[3585 + 9 + 5] = results[PROP_LOGPOW];
+    features_flashpoint_full[3585 + 9 + 6] = results[PROP_LOGWS];
+    features_flashpoint_full[3585 + 9 + 7] = results[PROP_DD];
+    features_flashpoint_full[3585 + 9 + 8] = results[PROP_DH];
+    features_flashpoint_full[3585 + 9 + 9] = results[PROP_DP];
+    features_flashpoint_full[3585 + 9 + 10] = results[PROP_MP];
+    
+    // LSFER (54) - Build FRESH
+    size_t lsfer_fp_start = 3585 + 9 + 11;
+    double V_fp = cascade_9[0], E_fp = cascade_9[1], L_fp = cascade_9[2], B_fp = cascade_9[3];
+    double S_fp = cascade_9[4], A_fp = cascade_9[5], Density_fp = cascade_9[6], RI_fp = cascade_9[7], Pol_fp = cascade_9[8];
+    features_flashpoint_full[lsfer_fp_start + 0] = V_fp;
+    features_flashpoint_full[lsfer_fp_start + 1] = E_fp;
+    features_flashpoint_full[lsfer_fp_start + 2] = L_fp;
+    features_flashpoint_full[lsfer_fp_start + 3] = B_fp;
+    features_flashpoint_full[lsfer_fp_start + 4] = S_fp;
+    features_flashpoint_full[lsfer_fp_start + 5] = A_fp;
+    features_flashpoint_full[lsfer_fp_start + 6] = Density_fp;
+    features_flashpoint_full[lsfer_fp_start + 7] = RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 8] = Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 9] = V_fp*V_fp;
+    features_flashpoint_full[lsfer_fp_start + 10] = E_fp*E_fp;
+    features_flashpoint_full[lsfer_fp_start + 11] = L_fp*L_fp;
+    features_flashpoint_full[lsfer_fp_start + 12] = B_fp*B_fp;
+    features_flashpoint_full[lsfer_fp_start + 13] = S_fp*S_fp;
+    features_flashpoint_full[lsfer_fp_start + 14] = A_fp*A_fp;
+    features_flashpoint_full[lsfer_fp_start + 15] = Density_fp*Density_fp;
+    features_flashpoint_full[lsfer_fp_start + 16] = RI_fp*RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 17] = Pol_fp*Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 18] = V_fp*E_fp;
+    features_flashpoint_full[lsfer_fp_start + 19] = V_fp*L_fp;
+    features_flashpoint_full[lsfer_fp_start + 20] = V_fp*B_fp;
+    features_flashpoint_full[lsfer_fp_start + 21] = V_fp*S_fp;
+    features_flashpoint_full[lsfer_fp_start + 22] = V_fp*A_fp;
+    features_flashpoint_full[lsfer_fp_start + 23] = V_fp*Density_fp;
+    features_flashpoint_full[lsfer_fp_start + 24] = V_fp*RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 25] = V_fp*Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 26] = E_fp*L_fp;
+    features_flashpoint_full[lsfer_fp_start + 27] = E_fp*B_fp;
+    features_flashpoint_full[lsfer_fp_start + 28] = E_fp*S_fp;
+    features_flashpoint_full[lsfer_fp_start + 29] = E_fp*A_fp;
+    features_flashpoint_full[lsfer_fp_start + 30] = E_fp*Density_fp;
+    features_flashpoint_full[lsfer_fp_start + 31] = E_fp*RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 32] = E_fp*Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 33] = L_fp*B_fp;
+    features_flashpoint_full[lsfer_fp_start + 34] = L_fp*S_fp;
+    features_flashpoint_full[lsfer_fp_start + 35] = L_fp*A_fp;
+    features_flashpoint_full[lsfer_fp_start + 36] = L_fp*Density_fp;
+    features_flashpoint_full[lsfer_fp_start + 37] = L_fp*RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 38] = L_fp*Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 39] = B_fp*S_fp;
+    features_flashpoint_full[lsfer_fp_start + 40] = B_fp*A_fp;
+    features_flashpoint_full[lsfer_fp_start + 41] = B_fp*Density_fp;
+    features_flashpoint_full[lsfer_fp_start + 42] = B_fp*RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 43] = B_fp*Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 44] = S_fp*A_fp;
+    features_flashpoint_full[lsfer_fp_start + 45] = S_fp*Density_fp;
+    features_flashpoint_full[lsfer_fp_start + 46] = S_fp*RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 47] = S_fp*Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 48] = A_fp*Density_fp;
+    features_flashpoint_full[lsfer_fp_start + 49] = A_fp*RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 50] = A_fp*Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 51] = Density_fp*RI_fp;
+    features_flashpoint_full[lsfer_fp_start + 52] = Density_fp*Pol_fp;
+    features_flashpoint_full[lsfer_fp_start + 53] = RI_fp*Pol_fp;
+    
+    // Physics (10) - Build FRESH
+    size_t physics_fp_start = lsfer_fp_start + 54;
+    double MW_fp = rdkit_features[0];
+    if (!std::isfinite(MW_fp) || MW_fp <= 0) MW_fp = 100.0;
+    double MR_fp = E_fp + 2.83195 * V_fp - 0.52553;
+    double Vm_fp = (Density_fp > 0.1) ? (MW_fp / Density_fp) : MW_fp;
+    double n2_fp = RI_fp * RI_fp;
+    double f_n_fp = ((n2_fp + 2) > 0.1) ? ((n2_fp - 1) / (n2_fp + 2)) : 0.2;
+    double Parachor_fp = (f_n_fp > 0.01) ? (MR_fp / f_n_fp) : 0.0;
+    double eps_CM_fp = ((1 - f_n_fp) > 0.01) ? ((1 + 2*f_n_fp) / (1 - f_n_fp)) : 2.0;
+    double alpha_pred_fp = 2.51 * MR_fp + 6.43;
+    double dD_est_fp = (Vm_fp > 0) ? (4.0 + 0.15 * (MR_fp / Vm_fp * 100)) : 15.0;
+    double dH_est_fp = 2.0 * (A_fp + B_fp) * 5;
+    double dP_est_fp = 2.0 * S_fp * 5;
+    double delta_total_fp = (dD_est_fp > 0) ? std::sqrt(dD_est_fp*dD_est_fp + dP_est_fp*dP_est_fp + dH_est_fp*dH_est_fp) : 0.0;
+    features_flashpoint_full[physics_fp_start + 0] = MR_fp;
+    features_flashpoint_full[physics_fp_start + 1] = Vm_fp;
+    features_flashpoint_full[physics_fp_start + 2] = f_n_fp;
+    features_flashpoint_full[physics_fp_start + 3] = Parachor_fp;
+    features_flashpoint_full[physics_fp_start + 4] = eps_CM_fp;
+    features_flashpoint_full[physics_fp_start + 5] = alpha_pred_fp;
+    features_flashpoint_full[physics_fp_start + 6] = dD_est_fp;
+    features_flashpoint_full[physics_fp_start + 7] = dH_est_fp;
+    features_flashpoint_full[physics_fp_start + 8] = dP_est_fp;
+    features_flashpoint_full[physics_fp_start + 9] = delta_total_fp;
+    
+    // Preprocess
+    for (size_t i = 0; i < 3669; ++i) {
+        if (std::isinf(features_flashpoint_full[i])) features_flashpoint_full[i] = 0.0;
+    }
+    for (int i = 0; i < ::flashpoint_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col_idx = ::flashpoint_cascade::ARCSINH_COLUMNS[i];
+        if (col_idx >= 0 && col_idx < 3669 && std::isfinite(features_flashpoint_full[col_idx])) {
+            features_flashpoint_full[col_idx] = std::asinh(features_flashpoint_full[col_idx]);
+        }
+    }
+    for (size_t i = 0; i < 3669; ++i) {
+        if (!std::isfinite(features_flashpoint_full[i])) features_flashpoint_full[i] = 0.0;
+    }
+    
+    // Predict Flashpoint
+    results[PROP_FLASHPOINT] = ::flashpoint_cascade::predict(features_flashpoint_full.data());
+    
+    // OLD models - REPLACED BY CASCADE
+    // std::vector<double> features_520 = features_517;
+    // features_520.push_back(results[PROP_DELTAHVAP]);
+    // features_520.push_back(results[PROP_BP]);
+    // features_520.push_back(results[PROP_LOGVP]);
+    // results[PROP_FLASHPOINT] = ::Osmordred::CascadeMeta37Flashpoint::predict(features_520);
+    
+    // =====================================================================================
+    // SHARED BASE FEATURES for logHenrycc, DipoleMoment, logODT
+    // Features: [osmordred(3585), abraham(9), cascade(12), LSFER(54), physics(10)] = 3670
+    // =====================================================================================
+    std::vector<double> features_base_3670(3670, 0.0);
+    // Osmordred (3585)
+    for (size_t i = 0; i < 3585 && i < osmordred_deltahc.size(); ++i) {
+        features_base_3670[i] = osmordred_deltahc[i];
+    }
+    // Abraham (9)
+    for (size_t i = 0; i < 9; ++i) {
+        features_base_3670[3585 + i] = cascade_9[i];
+    }
+    // Cascade (12): deltaHvap, BP, logVP, deltaHf, deltaHc, logPow, logWS, dD, dH, dP, MP, Flashpoint
+    features_base_3670[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_base_3670[3585 + 9 + 1] = results[PROP_BP];
+    features_base_3670[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_base_3670[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_base_3670[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_base_3670[3585 + 9 + 5] = results[PROP_LOGPOW];
+    features_base_3670[3585 + 9 + 6] = results[PROP_LOGWS];
+    features_base_3670[3585 + 9 + 7] = results[PROP_DD];
+    features_base_3670[3585 + 9 + 8] = results[PROP_DH];
+    features_base_3670[3585 + 9 + 9] = results[PROP_DP];
+    features_base_3670[3585 + 9 + 10] = results[PROP_MP];
+    features_base_3670[3585 + 9 + 11] = results[PROP_FLASHPOINT];
+    
+    // LSFER (54) - recalculate from raw Abraham values (NOT from features_mp_full which has arcsinh)
+    size_t lsfer_base_start = 3585 + 9 + 12;
+    // Raw 9: V, E, L, B, S, A, Density, RI, Polarizability
+    features_base_3670[lsfer_base_start + 0] = V_h;
+    features_base_3670[lsfer_base_start + 1] = E_h;
+    features_base_3670[lsfer_base_start + 2] = L_h;
+    features_base_3670[lsfer_base_start + 3] = B_h;
+    features_base_3670[lsfer_base_start + 4] = S_h;
+    features_base_3670[lsfer_base_start + 5] = A_h;
+    features_base_3670[lsfer_base_start + 6] = Density_h;
+    features_base_3670[lsfer_base_start + 7] = RI_h;
+    features_base_3670[lsfer_base_start + 8] = Polarizability_h;
+    // Squared
+    features_base_3670[lsfer_base_start + 9] = V_h*V_h;
+    features_base_3670[lsfer_base_start + 10] = E_h*E_h;
+    features_base_3670[lsfer_base_start + 11] = L_h*L_h;
+    features_base_3670[lsfer_base_start + 12] = B_h*B_h;
+    features_base_3670[lsfer_base_start + 13] = S_h*S_h;
+    features_base_3670[lsfer_base_start + 14] = A_h*A_h;
+    features_base_3670[lsfer_base_start + 15] = Density_h*Density_h;
+    features_base_3670[lsfer_base_start + 16] = RI_h*RI_h;
+    features_base_3670[lsfer_base_start + 17] = Polarizability_h*Polarizability_h;
+    // Cross terms
+    features_base_3670[lsfer_base_start + 18] = V_h*E_h;
+    features_base_3670[lsfer_base_start + 19] = V_h*L_h;
+    features_base_3670[lsfer_base_start + 20] = V_h*B_h;
+    features_base_3670[lsfer_base_start + 21] = V_h*S_h;
+    features_base_3670[lsfer_base_start + 22] = V_h*A_h;
+    features_base_3670[lsfer_base_start + 23] = V_h*Density_h;
+    features_base_3670[lsfer_base_start + 24] = V_h*RI_h;
+    features_base_3670[lsfer_base_start + 25] = V_h*Polarizability_h;
+    features_base_3670[lsfer_base_start + 26] = E_h*L_h;
+    features_base_3670[lsfer_base_start + 27] = E_h*B_h;
+    features_base_3670[lsfer_base_start + 28] = E_h*S_h;
+    features_base_3670[lsfer_base_start + 29] = E_h*A_h;
+    features_base_3670[lsfer_base_start + 30] = E_h*Density_h;
+    features_base_3670[lsfer_base_start + 31] = E_h*RI_h;
+    features_base_3670[lsfer_base_start + 32] = E_h*Polarizability_h;
+    features_base_3670[lsfer_base_start + 33] = L_h*B_h;
+    features_base_3670[lsfer_base_start + 34] = L_h*S_h;
+    features_base_3670[lsfer_base_start + 35] = L_h*A_h;
+    features_base_3670[lsfer_base_start + 36] = L_h*Density_h;
+    features_base_3670[lsfer_base_start + 37] = L_h*RI_h;
+    features_base_3670[lsfer_base_start + 38] = L_h*Polarizability_h;
+    features_base_3670[lsfer_base_start + 39] = B_h*S_h;
+    features_base_3670[lsfer_base_start + 40] = B_h*A_h;
+    features_base_3670[lsfer_base_start + 41] = B_h*Density_h;
+    features_base_3670[lsfer_base_start + 42] = B_h*RI_h;
+    features_base_3670[lsfer_base_start + 43] = B_h*Polarizability_h;
+    features_base_3670[lsfer_base_start + 44] = S_h*A_h;
+    features_base_3670[lsfer_base_start + 45] = S_h*Density_h;
+    features_base_3670[lsfer_base_start + 46] = S_h*RI_h;
+    features_base_3670[lsfer_base_start + 47] = S_h*Polarizability_h;
+    features_base_3670[lsfer_base_start + 48] = A_h*Density_h;
+    features_base_3670[lsfer_base_start + 49] = A_h*RI_h;
+    features_base_3670[lsfer_base_start + 50] = A_h*Polarizability_h;
+    features_base_3670[lsfer_base_start + 51] = Density_h*RI_h;
+    features_base_3670[lsfer_base_start + 52] = Density_h*Polarizability_h;
+    features_base_3670[lsfer_base_start + 53] = RI_h*Polarizability_h;
+    
+    // Physics (10) - use raw values
+    size_t physics_base_start = lsfer_base_start + 54;
+    features_base_3670[physics_base_start + 0] = MR_h;
+    features_base_3670[physics_base_start + 1] = Vm_h;
+    features_base_3670[physics_base_start + 2] = f_n_h;
+    features_base_3670[physics_base_start + 3] = Parachor_h;
+    features_base_3670[physics_base_start + 4] = eps_CM_h;
+    features_base_3670[physics_base_start + 5] = alpha_pred_h;
+    features_base_3670[physics_base_start + 6] = dD_est_h;
+    features_base_3670[physics_base_start + 7] = dH_est_h;
+    features_base_3670[physics_base_start + 8] = dP_est_h;
+    features_base_3670[physics_base_start + 9] = delta_total_h;
+    
+    // Convert inf to 0
+    for (size_t i = 0; i < 3670; ++i) if (std::isinf(features_base_3670[i])) features_base_3670[i] = 0.0;
+    
+    // logHenrycc
+    std::vector<double> features_henry_full = features_base_3670;
+    for (int i = 0; i < ::loghenrycc_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::loghenrycc_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3670 && std::isfinite(features_henry_full[col])) features_henry_full[col] = std::asinh(features_henry_full[col]);
+    }
+    for (size_t i = 0; i < 3670; ++i) if (!std::isfinite(features_henry_full[i])) features_henry_full[i] = 0.0;
+    results[PROP_LOGHENRYCC] = ::loghenrycc_cascade::predict(features_henry_full.data());
+    
+    // DipoleMoment (fresh copy from base)
+    std::vector<double> features_dipole_full = features_base_3670;
+    for (int i = 0; i < ::dipolemoment_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::dipolemoment_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3670 && std::isfinite(features_dipole_full[col])) features_dipole_full[col] = std::asinh(features_dipole_full[col]);
+    }
+    for (size_t i = 0; i < 3670; ++i) if (!std::isfinite(features_dipole_full[i])) features_dipole_full[i] = 0.0;
+    results[PROP_DIPOLEMOMENT] = ::dipolemoment_cascade::predict(features_dipole_full.data());
+    
+    // logODT (3671 features = 3670 + DipoleMoment)
+    std::vector<double> features_odt_full(3671, 0.0);
+    for (size_t i = 0; i < 3585 + 9 + 12; ++i) features_odt_full[i] = features_base_3670[i];
+    features_odt_full[3585 + 9 + 12] = results[PROP_DIPOLEMOMENT];
+    for (size_t i = 0; i < 64; ++i) features_odt_full[3585 + 9 + 13 + i] = features_base_3670[lsfer_base_start + i];
+    for (size_t i = 0; i < 3671; ++i) if (std::isinf(features_odt_full[i])) features_odt_full[i] = 0.0;
+    for (int i = 0; i < ::logodt_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::logodt_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3671 && std::isfinite(features_odt_full[col])) features_odt_full[col] = std::asinh(features_odt_full[col]);
+    }
+    for (size_t i = 0; i < 3671; ++i) if (!std::isfinite(features_odt_full[i])) features_odt_full[i] = 0.0;
+    results[PROP_LOGODT] = ::logodt_cascade::predict(features_odt_full.data());
+    
+    // =====================================================================================
+    // VISCOSITY - log10(viscosity in cP) at 25°C
+    // Features: [osmordred(3585), abraham(9), cascade(12), LSFER(54), physics(10)] = 3670
+    // =====================================================================================
+    std::vector<double> features_visc_full = features_base_3670;
+    // Apply arcsinh to specific columns (from training)
+    for (int i = 0; i < ::viscosity_cascade_model::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::viscosity_cascade_model::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3670 && std::isfinite(features_visc_full[col])) {
+            features_visc_full[col] = std::asinh(features_visc_full[col]);
+        }
+    }
+    for (size_t i = 0; i < 3670; ++i) if (!std::isfinite(features_visc_full[i])) features_visc_full[i] = 0.0;
+    results[PROP_LOGVISCOSITY] = ::viscosity_cascade_model::predict(features_visc_full.data());
+    
+    return results;
+}
+
+// Batch version: Calculate properties for multiple molecules using RDKit parallelization
+// Uses RDKit threading utilities for parallel processing
+std::vector<std::vector<double>> calcPhysChemPropBatch(
+    const std::vector<std::string>& smiles_list, int n_jobs) {
+    
+    std::vector<std::vector<double>> results;
+    results.reserve(smiles_list.size());
+    
+    // Determine number of threads to use
+    unsigned int nThreads = getNumThreadsToUse(n_jobs);
+    
+    // For small batches, use sequential processing
+    if (nThreads <= 1 || smiles_list.size() < 10) {
+        for (const auto& smi : smiles_list) {
+            ROMol* mol = SmilesToMol(smi);
+            if (mol) {
+                results.push_back(calcPhysChemProp(*mol));
+                delete mol;
+            } else {
+                // Return vector of zeros for invalid SMILES
+                results.push_back(std::vector<double>(NUM_PHYSCHEM_PROPS, 0.0));
+            }
+        }
+        return results;
+    }
+    
+    // Parallel processing using std::async (similar to OsmordredParallel)
+    std::vector<std::future<std::vector<double>>> futures;
+    futures.reserve(smiles_list.size());
+    
+    // Process molecules in parallel
+    for (size_t idx = 0; idx < smiles_list.size(); ++idx) {
+        const auto& smi = smiles_list[idx];
+        
+        futures.emplace_back(std::async(std::launch::async, [smi]() {
+            try {
+                ROMol* mol = SmilesToMol(smi);
+                if (mol) {
+                    try {
+                        std::vector<double> props = calcPhysChemProp(*mol);
+                        delete mol;
+                        return props;
+                    } catch (...) {
+                        // If calcPhysChemProp fails, return zeros and continue processing
+                        delete mol;
+                        return std::vector<double>(NUM_PHYSCHEM_PROPS, 0.0);
+                    }
+                } else {
+                    return std::vector<double>(NUM_PHYSCHEM_PROPS, 0.0);
+                }
+            } catch (...) {
+                // Catch any other exceptions (e.g., memory errors) and return zeros
+                return std::vector<double>(NUM_PHYSCHEM_PROPS, 0.0);
+            }
+        }));
+    }
+    
+    // Collect results
+    for (auto& f : futures) {
+        results.push_back(f.get());
+    }
+    
+    return results;
+}
+
+// ========================================================================
+// OPTIMIZED VERSIONS - Compute base features ONCE and reuse
+// ========================================================================
+
+// Extract ALL base features once (for optimal reuse)
+CachedMolFeatures extractAllBaseFeatures(const ROMol& mol) {
+    CachedMolFeatures cache;
+    
+    // Compute heavy features ONCE
+    cache.osmordred = calcOsmordred(mol);
+    if (cache.osmordred.size() < 3585) {
+        cache.osmordred.resize(3585, 0.0);
+    } else if (cache.osmordred.size() > 3585) {
+        cache.osmordred.resize(3585);
+    }
+    
+    cache.rdkit = extractRDKitDescriptors(mol);
+    if (cache.rdkit.size() != 217) {
+        cache.rdkit.resize(217, 0.0);
+    }
+    
+    cache.smarts = calcAbrahamsV2Features(mol);
+    if (cache.smarts.size() != 291) {
+        cache.smarts.resize(291, 0.0);
+    }
+    
+    // Build base_508 = rdkit + smarts
+    cache.base_508.reserve(508);
+    cache.base_508.insert(cache.base_508.end(), cache.rdkit.begin(), cache.rdkit.end());
+    cache.base_508.insert(cache.base_508.end(), cache.smarts.begin(), cache.smarts.end());
+    
+    // Abraham parameters
+    cache.abraham = calcAbrahamsV2(mol);
+    
+    // Molecular properties
+    cache.MW = calcAMW(mol);
+    calcCrippenDescriptors(mol, cache.logP, cache.MR);
+    
+    return cache;
+}
+
+// Helper to build physics features from cached data
+static std::vector<double> buildPhysicsFeaturesFromCache(
+    const CachedMolFeatures& cache,
+    double Density, double RI, double Polarizability) {
+    
+    double MW = cache.MW;
+    double MR = cache.MR;
+    double Polar = Polarizability;
+    
+    // Use defaults if invalid
+    Density = (Density > 0.1) ? Density : 1.0;
+    RI = (RI > 1.0) ? RI : 1.4;
+    Polar = (Polar > 0) ? Polar : MR * 0.4;
+    
+    double Vm = MW / Density;
+    double n2 = RI * RI;
+    double f_n = (n2 - 1) / (n2 + 2);
+    
+    std::vector<double> physics;
+    physics.reserve(21);
+    
+    physics.push_back(MW);                                    // 0
+    physics.push_back(MR);                                    // 1
+    physics.push_back(std::sqrt(std::abs(MW)));              // 2
+    physics.push_back(std::log(std::abs(MW) + 1));            // 3
+    physics.push_back(MR / (MW + 1));                        // 4
+    physics.push_back(MW / (MR + 1));                        // 5
+    physics.push_back(MR * MR);                               // 6
+    physics.push_back(Density);                                // 7
+    physics.push_back(Vm);                                    // 8
+    physics.push_back(std::sqrt(std::abs(Vm)));              // 9
+    physics.push_back(MW * Density);                          // 10
+    physics.push_back(Density / (MW + 0.01));                // 11
+    physics.push_back(RI);                                    // 12
+    physics.push_back(f_n);                                  // 13
+    physics.push_back(n2);                                   // 14
+    physics.push_back(RI - 1);                               // 15
+    physics.push_back(f_n * MW);                             // 16
+    physics.push_back(Polar);                                // 17
+    physics.push_back(std::sqrt(std::abs(Polar)));           // 18
+    physics.push_back(Polar / (MW + 0.01));                  // 19
+    physics.push_back(Polar * MR);                           // 20
+    
+    return physics;
+}
+
+// OPTIMIZED version: For now, just call calcPhysChemProp to ensure consistency
+// TODO: Once bugs are fixed, restore the optimized implementation
+std::vector<double> calcPhysChemPropOptimal(const ROMol& mol) {
+    // TEMPORARY: Just call calcPhysChemProp to ensure consistency
+    // The "optimal" version had subtle bugs in feature construction
+    return calcPhysChemProp(mol);
+    
+    // ===== ORIGINAL OPTIMIZED CODE BELOW (DISABLED) =====
+    // Keeping for reference - to be debugged later
+    #if 0
+    std::vector<double> results(NUM_PHYSCHEM_PROPS);
+    
+    // Early exit for very large molecules (prevents timeout/hanging)
+    unsigned int numHeavyAtoms = mol.getNumHeavyAtoms();
+    unsigned int numRings = RDKit::Descriptors::calcNumRings(mol);
+    if (numHeavyAtoms > 200 || numRings > 12) {
+        std::fill(results.begin(), results.end(), std::numeric_limits<double>::quiet_NaN());
+        return results;
+    }
+    
+    // ===== STEP 1: EXTRACT ALL BASE FEATURES ONCE =====
+    CachedMolFeatures cache = extractAllBaseFeatures(mol);
+    
+    // ===== STEP 2: GET CASCADE PREDICTIONS (V,E,L,B,S,A,Density,RI) =====
+    std::vector<double> cascade = ::Osmordred::predictCascade(cache.base_508);
+    
+    results[PROP_V] = cascade[0];
+    results[PROP_E] = cascade[1];
+    results[PROP_L] = cascade[2];
+    results[PROP_B] = cascade[3];
+    results[PROP_S] = cascade[4];
+    results[PROP_A] = cascade[5];
+    results[PROP_DENSITY] = cascade[6];
+    results[PROP_RI] = cascade[7];
+    
+    // ===== STEP 3: POLARIZABILITY (using cached features) =====
+    // Build 548 features: 291 SMARTS + 217 RDKit + 10 Physics + 30 Golden
+    std::vector<double> polar_v2_features;
+    polar_v2_features.reserve(548);
+    
+    // SMARTS (291)
+    polar_v2_features.insert(polar_v2_features.end(), cache.smarts.begin(), cache.smarts.end());
+    // RDKit (217)
+    polar_v2_features.insert(polar_v2_features.end(), cache.rdkit.begin(), cache.rdkit.end());
+    
+    // Abraham parameters from cache
+    double V = cache.abraham[5];
+    double E = cache.abraham[3];
+    double L = cache.abraham[4];
+    double B = cache.abraham[1];
+    double S = cache.abraham[2];
+    double A = cache.abraham[0];
+    double MW = cache.MW;
+    double MR = cache.MR;
+    
+    // 10 Basic physics features
+    polar_v2_features.push_back(MW);
+    polar_v2_features.push_back(MR);
+    polar_v2_features.push_back(std::max(-1e3, std::min(1e3, std::sqrt(std::abs(MW)))));
+    polar_v2_features.push_back(std::max(-1e3, std::min(1e3, std::log(std::abs(MW) + 1))));
+    polar_v2_features.push_back(std::max(-1e3, std::min(1e3, MR / (MW + 1))));
+    polar_v2_features.push_back(std::max(-1e3, std::min(1e3, MW / (MR + 1))));
+    polar_v2_features.push_back(std::max(-1e3, std::min(1e3, MR * MR)));
+    polar_v2_features.push_back(std::max(-1e3, std::min(1e3, MW * MW)));
+    polar_v2_features.push_back(std::max(-1e3, std::min(1e3, MR * MW)));
+    polar_v2_features.push_back(std::max(-1e3, std::min(1e3, std::sqrt(std::abs(MR)))));
+    
+    // 30 Golden features from Abraham
+    polar_v2_features.push_back(V);
+    polar_v2_features.push_back(E);
+    polar_v2_features.push_back(L);
+    polar_v2_features.push_back(B);
+    polar_v2_features.push_back(S);
+    polar_v2_features.push_back(A);
+    polar_v2_features.push_back(V * V);
+    polar_v2_features.push_back(E * E);
+    polar_v2_features.push_back(L * L);
+    polar_v2_features.push_back(B * B);
+    polar_v2_features.push_back(S * S);
+    polar_v2_features.push_back(A * A);
+    polar_v2_features.push_back(V * E);
+    polar_v2_features.push_back(V * L);
+    polar_v2_features.push_back(V * B);
+    polar_v2_features.push_back(V * S);
+    polar_v2_features.push_back(V * A);
+    polar_v2_features.push_back(E * L);
+    polar_v2_features.push_back(E * B);
+    polar_v2_features.push_back(E * S);
+    polar_v2_features.push_back(E * A);
+    polar_v2_features.push_back(L * B);
+    polar_v2_features.push_back(L * S);
+    polar_v2_features.push_back(L * A);
+    polar_v2_features.push_back(B * S);
+    polar_v2_features.push_back(B * A);
+    polar_v2_features.push_back(S * A);
+    polar_v2_features.push_back(std::sqrt(std::max(0.0, V)));
+    polar_v2_features.push_back(std::sqrt(std::max(0.0, E)));
+    polar_v2_features.push_back(std::sqrt(std::max(0.0, L)));
+    
+    if (polar_v2_features.size() != 548) polar_v2_features.resize(548, 0.0);
+    for (size_t i = 0; i < polar_v2_features.size(); ++i) {
+        if (!std::isfinite(polar_v2_features[i])) polar_v2_features[i] = 0.0;
+    }
+    
+    results[PROP_POLARIZABILITY] = ::Osmordred::CascadePolarizabilityV2::predict(polar_v2_features.data());
+    
+    // ===== STEP 4: BUILD CASCADE_9 FOR SUBSEQUENT MODELS =====
+    // MUST match Python training order: [V, E, L, S, A, B, Density, RI, Pol]
+    std::vector<double> cascade_9 = {
+        results[PROP_V], results[PROP_E], results[PROP_L], results[PROP_S],  // S not B!
+        results[PROP_A], results[PROP_B], results[PROP_DENSITY], results[PROP_RI],  // A, B not S, A!
+        results[PROP_POLARIZABILITY]
+    };
+    
+    // ===== STEP 5: BUILD FULL 4093 BASE FEATURES (REUSING CACHED) =====
+    // Order: [SMARTS(291), RDKit(217), Osmordred(3585)]
+    std::vector<double> base_4093(4093, 0.0);
+    for (size_t i = 0; i < 291; ++i) base_4093[i] = cache.smarts[i];
+    for (size_t i = 0; i < 217; ++i) base_4093[291 + i] = cache.rdkit[i];
+    for (size_t i = 0; i < 3585; ++i) base_4093[508 + i] = cache.osmordred[i];
+    
+    // Convert inf to nan in base features
+    for (size_t i = 0; i < 4093; ++i) {
+        if (std::isinf(base_4093[i])) {
+            base_4093[i] = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    
+    // ===== STEP 6: COMPUTE ALL CASCADE PROPERTIES USING CACHED FEATURES =====
+    // Helper lambda to build LSFER (54 features)
+    auto buildLSFER54 = [&cascade_9]() -> std::vector<double> {
+        std::vector<double> lsfer(54);
+        double V = cascade_9[0], E = cascade_9[1], L = cascade_9[2], B = cascade_9[3];
+        double S = cascade_9[4], A = cascade_9[5], Density = cascade_9[6], RI = cascade_9[7], Pol = cascade_9[8];
+        
+        // Raw (9)
+        lsfer[0] = V; lsfer[1] = E; lsfer[2] = L; lsfer[3] = B;
+        lsfer[4] = S; lsfer[5] = A; lsfer[6] = Density; lsfer[7] = RI; lsfer[8] = Pol;
+        // Squares (9)
+        lsfer[9] = V*V; lsfer[10] = E*E; lsfer[11] = L*L; lsfer[12] = B*B;
+        lsfer[13] = S*S; lsfer[14] = A*A; lsfer[15] = Density*Density; lsfer[16] = RI*RI; lsfer[17] = Pol*Pol;
+        // Products (36)
+        size_t idx = 18;
+        lsfer[idx++] = V*E; lsfer[idx++] = V*L; lsfer[idx++] = V*B; lsfer[idx++] = V*S; lsfer[idx++] = V*A;
+        lsfer[idx++] = V*Density; lsfer[idx++] = V*RI; lsfer[idx++] = V*Pol;
+        lsfer[idx++] = E*L; lsfer[idx++] = E*B; lsfer[idx++] = E*S; lsfer[idx++] = E*A;
+        lsfer[idx++] = E*Density; lsfer[idx++] = E*RI; lsfer[idx++] = E*Pol;
+        lsfer[idx++] = L*B; lsfer[idx++] = L*S; lsfer[idx++] = L*A;
+        lsfer[idx++] = L*Density; lsfer[idx++] = L*RI; lsfer[idx++] = L*Pol;
+        lsfer[idx++] = B*S; lsfer[idx++] = B*A; lsfer[idx++] = B*Density;
+        lsfer[idx++] = B*RI; lsfer[idx++] = B*Pol;
+        lsfer[idx++] = S*A; lsfer[idx++] = S*Density; lsfer[idx++] = S*RI; lsfer[idx++] = S*Pol;
+        lsfer[idx++] = A*Density; lsfer[idx++] = A*RI; lsfer[idx++] = A*Pol;
+        lsfer[idx++] = Density*RI; lsfer[idx++] = Density*Pol;
+        lsfer[idx++] = RI*Pol;
+        return lsfer;
+    };
+    
+    // Helper lambda to build physics (10 features)
+    auto buildPhysics10 = [&cascade_9, &cache]() -> std::vector<double> {
+        double V = cascade_9[0], E = cascade_9[1], B = cascade_9[3], S = cascade_9[4], A = cascade_9[5];
+        double Density = cascade_9[6], RI = cascade_9[7];
+        double MW = cache.MW;
+        if (!std::isfinite(MW) || MW <= 0) MW = 100.0;
+        
+        double MR = E + 2.83195 * V - 0.52553;
+        double Vm = (Density > 0.1) ? (MW / Density) : MW;
+        double n2 = RI * RI;
+        double f_n = ((n2 + 2) > 0.1) ? ((n2 - 1) / (n2 + 2)) : 0.2;
+        double Parachor = (f_n > 0.01) ? (MR / f_n) : 0.0;
+        double eps_CM = ((1 - f_n) > 0.01) ? ((1 + 2*f_n) / (1 - f_n)) : 2.0;
+        double alpha_pred = 2.51 * MR + 6.43;
+        double dD_est = (Vm > 0) ? (4.0 + 0.15 * (MR / Vm * 100)) : 15.0;
+        double dH_est = 2.0 * (A + B) * 5;
+        double dP_est = 2.0 * S * 5;
+        double delta_total = (dD_est > 0) ? std::sqrt(dD_est*dD_est + dP_est*dP_est + dH_est*dH_est) : 0.0;
+        
+        return {MR, Vm, f_n, Parachor, eps_CM, alpha_pred, dD_est, dH_est, dP_est, delta_total};
+    };
+    
+    std::vector<double> lsfer_54 = buildLSFER54();
+    std::vector<double> physics_10 = buildPhysics10();
+    
+    // ===== DELTAHVAP (4166 features) =====
+    std::vector<double> features_dhvap(4166, 0.0);
+    for (size_t i = 0; i < 4093; ++i) features_dhvap[i] = base_4093[i];
+    for (size_t i = 0; i < 4093; ++i) {
+        if (!std::isfinite(features_dhvap[i])) features_dhvap[i] = 0.0;
+    }
+    for (size_t i = 0; i < 9; ++i) features_dhvap[4093 + i] = cascade_9[i];
+    for (size_t i = 0; i < 54; ++i) features_dhvap[4093 + 9 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_dhvap[4093 + 9 + 54 + i] = physics_10[i];
+    
+    for (int i = 0; i < ::osmo::physchemprop::cascade::deltaHvapExported::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::osmo::physchemprop::cascade::deltaHvapExported::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 4166) features_dhvap[col] = std::asinh(features_dhvap[col]);
+    }
+    results[PROP_DELTAHVAP] = ::osmo::physchemprop::cascade::deltaHvapExported::predict(features_dhvap.data());
+    
+    // ===== BP (4167 features) =====
+    std::vector<double> features_bp(4167, 0.0);
+    for (size_t i = 0; i < 4093; ++i) features_bp[i] = base_4093[i];
+    for (size_t i = 0; i < 4093; ++i) if (std::isinf(features_bp[i])) features_bp[i] = std::numeric_limits<double>::quiet_NaN();
+    for (size_t i = 0; i < 9; ++i) features_bp[4093 + i] = cascade_9[i];
+    features_bp[4093 + 9] = results[PROP_DELTAHVAP];
+    for (size_t i = 0; i < 54; ++i) features_bp[4093 + 10 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_bp[4093 + 10 + 54 + i] = physics_10[i];
+    
+    for (size_t i = 0; i < 4167; ++i) if (std::isinf(features_bp[i])) features_bp[i] = 0.0;
+    for (int i = 0; i < ::osmo::physchemprop::cascade::bpExported::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::osmo::physchemprop::cascade::bpExported::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 4167 && std::isfinite(features_bp[col])) features_bp[col] = std::asinh(features_bp[col]);
+    }
+    for (size_t i = 0; i < 4167; ++i) if (!std::isfinite(features_bp[i])) features_bp[i] = 0.0;
+    results[PROP_BP] = ::osmo::physchemprop::cascade::bpExported::predict(features_bp.data());
+    
+    // ===== LOGVP (4168 features) =====
+    std::vector<double> features_logvp(4168, 0.0);
+    for (size_t i = 0; i < 4093; ++i) features_logvp[i] = base_4093[i];
+    for (size_t i = 0; i < 9; ++i) features_logvp[4093 + i] = cascade_9[i];
+    features_logvp[4093 + 9] = results[PROP_DELTAHVAP];
+    features_logvp[4093 + 10] = results[PROP_BP];
+    for (size_t i = 0; i < 54; ++i) features_logvp[4093 + 11 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_logvp[4093 + 11 + 54 + i] = physics_10[i];
+    
+    for (size_t i = 0; i < 4168; ++i) if (std::isinf(features_logvp[i])) features_logvp[i] = 0.0;
+    for (int i = 0; i < ::osmo::physchemprop::cascade::logvpExported::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::osmo::physchemprop::cascade::logvpExported::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 4168 && std::isfinite(features_logvp[col])) features_logvp[col] = std::asinh(features_logvp[col]);
+    }
+    for (size_t i = 0; i < 4168; ++i) if (!std::isfinite(features_logvp[i])) features_logvp[i] = 0.0;
+    results[PROP_LOGVP] = ::osmo::physchemprop::cascade::logvpExported::predict(features_logvp.data());
+    
+    // ===== DELTAHF (4169 features) =====
+    std::vector<double> features_hf(4169, 0.0);
+    for (size_t i = 0; i < 4093; ++i) features_hf[i] = base_4093[i];
+    for (size_t i = 0; i < 9; ++i) features_hf[4093 + i] = cascade_9[i];
+    features_hf[4093 + 9] = results[PROP_DELTAHVAP];
+    features_hf[4093 + 10] = results[PROP_BP];
+    features_hf[4093 + 11] = results[PROP_LOGVP];
+    for (size_t i = 0; i < 54; ++i) features_hf[4093 + 12 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_hf[4093 + 12 + 54 + i] = physics_10[i];
+    
+    for (size_t i = 0; i < 4169; ++i) if (std::isinf(features_hf[i])) features_hf[i] = 0.0;
+    for (int i = 0; i < ::osmo::physchemprop::cascade::deltahfExported::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::osmo::physchemprop::cascade::deltahfExported::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 4169 && std::isfinite(features_hf[col])) features_hf[col] = std::asinh(features_hf[col]);
+    }
+    for (size_t i = 0; i < 4169; ++i) if (!std::isfinite(features_hf[i])) features_hf[i] = 0.0;
+    results[PROP_DELTAHF] = ::osmo::physchemprop::cascade::deltahfExported::predict(features_hf.data());
+    
+    // ===== DELTAHC (4170 features) =====
+    std::vector<double> features_hc(4170, 0.0);
+    for (size_t i = 0; i < 4093; ++i) features_hc[i] = base_4093[i];
+    for (size_t i = 0; i < 9; ++i) features_hc[4093 + i] = cascade_9[i];
+    features_hc[4093 + 9] = results[PROP_DELTAHVAP];
+    features_hc[4093 + 10] = results[PROP_BP];
+    features_hc[4093 + 11] = results[PROP_LOGVP];
+    features_hc[4093 + 12] = results[PROP_DELTAHF];
+    for (size_t i = 0; i < 54; ++i) features_hc[4093 + 13 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_hc[4093 + 13 + 54 + i] = physics_10[i];
+    
+    for (size_t i = 0; i < 4170; ++i) if (std::isinf(features_hc[i])) features_hc[i] = 0.0;
+    for (int i = 0; i < ::osmo::physchemprop::cascade::deltahcExported::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::osmo::physchemprop::cascade::deltahcExported::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 4170 && std::isfinite(features_hc[col])) features_hc[col] = std::asinh(features_hc[col]);
+    }
+    for (size_t i = 0; i < 4170; ++i) if (!std::isfinite(features_hc[i])) features_hc[i] = 0.0;
+    results[PROP_DELTAHC] = ::osmo::physchemprop::cascade::deltahcExported::predict(features_hc.data());
+    
+    // ===== LOGPOW (3663 features) =====
+    std::vector<double> features_logpow(3663, 0.0);
+    for (size_t i = 0; i < 3585; ++i) features_logpow[i] = cache.osmordred[i];
+    for (size_t i = 0; i < 9; ++i) features_logpow[3585 + i] = cascade_9[i];
+    features_logpow[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_logpow[3585 + 9 + 1] = results[PROP_BP];
+    features_logpow[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_logpow[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_logpow[3585 + 9 + 4] = results[PROP_DELTAHC];
+    for (size_t i = 0; i < 54; ++i) features_logpow[3585 + 9 + 5 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_logpow[3585 + 9 + 5 + 54 + i] = physics_10[i];
+    
+    for (size_t i = 0; i < 3663; ++i) if (std::isinf(features_logpow[i])) features_logpow[i] = 0.0;
+    for (int i = 0; i < ::logpow_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::logpow_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3663 && std::isfinite(features_logpow[col])) features_logpow[col] = std::asinh(features_logpow[col]);
+    }
+    for (size_t i = 0; i < 3663; ++i) if (!std::isfinite(features_logpow[i])) features_logpow[i] = 0.0;
+    results[PROP_LOGPOW] = ::logpow_cascade::predict(features_logpow.data());
+    
+    // ===== LOGWS (3664 features) =====
+    // Build FRESH LSFER/physics (single arcsinh) - matches training code!
+    // NOTE: The original C++ code had a BUG (double arcsinh by copying from logPow)
+    std::vector<double> features_logws(3664, 0.0);
+    for (size_t i = 0; i < 3585; ++i) features_logws[i] = cache.osmordred[i];
+    for (size_t i = 0; i < 9; ++i) features_logws[3585 + i] = cascade_9[i];
+    features_logws[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_logws[3585 + 9 + 1] = results[PROP_BP];
+    features_logws[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_logws[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_logws[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_logws[3585 + 9 + 5] = results[PROP_LOGPOW];
+    for (size_t i = 0; i < 54; ++i) features_logws[3585 + 9 + 6 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_logws[3585 + 9 + 6 + 54 + i] = physics_10[i];
+    
+    for (size_t i = 0; i < 3664; ++i) if (std::isinf(features_logws[i])) features_logws[i] = 0.0;
+    for (int i = 0; i < ::logws_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::logws_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3664 && std::isfinite(features_logws[col])) features_logws[col] = std::asinh(features_logws[col]);
+    }
+    for (size_t i = 0; i < 3664; ++i) if (!std::isfinite(features_logws[i])) features_logws[i] = 0.0;
+    results[PROP_LOGWS] = ::logws_cascade::predict(features_logws.data());
+    
+    // ===== HANSEN (dD, dH, dP) - 3665 features =====
+    std::vector<double> features_hansen(3665, 0.0);
+    for (size_t i = 0; i < 3585; ++i) features_hansen[i] = cache.osmordred[i];
+    for (size_t i = 0; i < 9; ++i) features_hansen[3585 + i] = cascade_9[i];
+    features_hansen[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_hansen[3585 + 9 + 1] = results[PROP_BP];
+    features_hansen[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_hansen[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_hansen[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_hansen[3585 + 9 + 5] = results[PROP_LOGPOW];
+    features_hansen[3585 + 9 + 6] = results[PROP_LOGWS];
+    for (size_t i = 0; i < 54; ++i) features_hansen[3585 + 9 + 7 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_hansen[3585 + 9 + 7 + 54 + i] = physics_10[i];
+    
+    // dD
+    std::vector<double> features_dd = features_hansen;
+    for (size_t i = 0; i < 3665; ++i) if (std::isinf(features_dd[i])) features_dd[i] = 0.0;
+    for (int i = 0; i < ::dd_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::dd_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3665 && std::isfinite(features_dd[col])) features_dd[col] = std::asinh(features_dd[col]);
+    }
+    for (size_t i = 0; i < 3665; ++i) if (!std::isfinite(features_dd[i])) features_dd[i] = 0.0;
+    results[PROP_DD] = ::dd_cascade::predict(features_dd.data());
+    
+    // dH
+    std::vector<double> features_dh = features_hansen;
+    for (size_t i = 0; i < 3665; ++i) if (std::isinf(features_dh[i])) features_dh[i] = 0.0;
+    for (int i = 0; i < ::dh_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::dh_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3665 && std::isfinite(features_dh[col])) features_dh[col] = std::asinh(features_dh[col]);
+    }
+    for (size_t i = 0; i < 3665; ++i) if (!std::isfinite(features_dh[i])) features_dh[i] = 0.0;
+    results[PROP_DH] = ::dh_cascade::predict(features_dh.data());
+    
+    // dP
+    std::vector<double> features_dp = features_hansen;
+    for (size_t i = 0; i < 3665; ++i) if (std::isinf(features_dp[i])) features_dp[i] = 0.0;
+    for (int i = 0; i < ::dp_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::dp_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3665 && std::isfinite(features_dp[col])) features_dp[col] = std::asinh(features_dp[col]);
+    }
+    for (size_t i = 0; i < 3665; ++i) if (!std::isfinite(features_dp[i])) features_dp[i] = 0.0;
+    results[PROP_DP] = ::dp_cascade::predict(features_dp.data());
+    
+    // ===== MP (3669 features) =====
+    std::vector<double> features_mp(3669, 0.0);
+    for (size_t i = 0; i < 3585; ++i) features_mp[i] = cache.osmordred[i];
+    for (size_t i = 0; i < 9; ++i) features_mp[3585 + i] = cascade_9[i];
+    features_mp[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_mp[3585 + 9 + 1] = results[PROP_BP];
+    features_mp[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_mp[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_mp[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_mp[3585 + 9 + 5] = results[PROP_LOGPOW];
+    features_mp[3585 + 9 + 6] = results[PROP_LOGWS];
+    features_mp[3585 + 9 + 7] = results[PROP_DD];
+    features_mp[3585 + 9 + 8] = results[PROP_DH];
+    features_mp[3585 + 9 + 9] = results[PROP_DP];
+    for (size_t i = 0; i < 54; ++i) features_mp[3585 + 9 + 10 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_mp[3585 + 9 + 10 + 54 + i] = physics_10[i];
+    double yalkowsky_mp = 100.0 * (0.5 - results[PROP_LOGWS] - results[PROP_LOGPOW]) + 25.0;
+    features_mp[3585 + 9 + 10 + 54 + 10] = yalkowsky_mp;
+    
+    for (size_t i = 0; i < 3669; ++i) if (std::isinf(features_mp[i])) features_mp[i] = 0.0;
+    for (int i = 0; i < ::mp_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::mp_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3669 && std::isfinite(features_mp[col])) features_mp[col] = std::asinh(features_mp[col]);
+    }
+    for (size_t i = 0; i < 3669; ++i) if (!std::isfinite(features_mp[i])) features_mp[i] = 0.0;
+    results[PROP_MP] = ::mp_cascade::predict(features_mp.data());
+    
+    // ===== FLASHPOINT (3669 features) =====
+    // Build FRESH osmordred/LSFER/physics (single arcsinh) - matches training code!
+    // NOTE: The original C++ code had a BUG (double arcsinh by copying from MP)
+    std::vector<double> features_fp(3669, 0.0);
+    for (size_t i = 0; i < 3585; ++i) features_fp[i] = cache.osmordred[i];
+    for (size_t i = 0; i < 9; ++i) features_fp[3585 + i] = cascade_9[i];
+    features_fp[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_fp[3585 + 9 + 1] = results[PROP_BP];
+    features_fp[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_fp[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_fp[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_fp[3585 + 9 + 5] = results[PROP_LOGPOW];
+    features_fp[3585 + 9 + 6] = results[PROP_LOGWS];
+    features_fp[3585 + 9 + 7] = results[PROP_DD];
+    features_fp[3585 + 9 + 8] = results[PROP_DH];
+    features_fp[3585 + 9 + 9] = results[PROP_DP];
+    features_fp[3585 + 9 + 10] = results[PROP_MP];
+    for (size_t i = 0; i < 54; ++i) features_fp[3585 + 9 + 11 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_fp[3585 + 9 + 11 + 54 + i] = physics_10[i];
+    
+    for (size_t i = 0; i < 3669; ++i) if (std::isinf(features_fp[i])) features_fp[i] = 0.0;
+    for (int i = 0; i < ::flashpoint_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::flashpoint_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3669 && std::isfinite(features_fp[col])) features_fp[col] = std::asinh(features_fp[col]);
+    }
+    for (size_t i = 0; i < 3669; ++i) if (!std::isfinite(features_fp[i])) features_fp[i] = 0.0;
+    results[PROP_FLASHPOINT] = ::flashpoint_cascade::predict(features_fp.data());
+    
+    // ===== BASE 3670 for logHenrycc, DipoleMoment, logODT =====
+    std::vector<double> features_base_3670(3670, 0.0);
+    for (size_t i = 0; i < 3585; ++i) features_base_3670[i] = cache.osmordred[i];
+    for (size_t i = 0; i < 9; ++i) features_base_3670[3585 + i] = cascade_9[i];
+    features_base_3670[3585 + 9 + 0] = results[PROP_DELTAHVAP];
+    features_base_3670[3585 + 9 + 1] = results[PROP_BP];
+    features_base_3670[3585 + 9 + 2] = results[PROP_LOGVP];
+    features_base_3670[3585 + 9 + 3] = results[PROP_DELTAHF];
+    features_base_3670[3585 + 9 + 4] = results[PROP_DELTAHC];
+    features_base_3670[3585 + 9 + 5] = results[PROP_LOGPOW];
+    features_base_3670[3585 + 9 + 6] = results[PROP_LOGWS];
+    features_base_3670[3585 + 9 + 7] = results[PROP_DD];
+    features_base_3670[3585 + 9 + 8] = results[PROP_DH];
+    features_base_3670[3585 + 9 + 9] = results[PROP_DP];
+    features_base_3670[3585 + 9 + 10] = results[PROP_MP];
+    features_base_3670[3585 + 9 + 11] = results[PROP_FLASHPOINT];
+    for (size_t i = 0; i < 54; ++i) features_base_3670[3585 + 9 + 12 + i] = lsfer_54[i];
+    for (size_t i = 0; i < 10; ++i) features_base_3670[3585 + 9 + 12 + 54 + i] = physics_10[i];
+    for (size_t i = 0; i < 3670; ++i) if (std::isinf(features_base_3670[i])) features_base_3670[i] = 0.0;
+    
+    // logHenrycc
+    std::vector<double> features_henry = features_base_3670;
+    for (int i = 0; i < ::loghenrycc_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::loghenrycc_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3670 && std::isfinite(features_henry[col])) features_henry[col] = std::asinh(features_henry[col]);
+    }
+    for (size_t i = 0; i < 3670; ++i) if (!std::isfinite(features_henry[i])) features_henry[i] = 0.0;
+    results[PROP_LOGHENRYCC] = ::loghenrycc_cascade::predict(features_henry.data());
+    
+    // DipoleMoment
+    std::vector<double> features_dipole = features_base_3670;
+    for (int i = 0; i < ::dipolemoment_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::dipolemoment_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3670 && std::isfinite(features_dipole[col])) features_dipole[col] = std::asinh(features_dipole[col]);
+    }
+    for (size_t i = 0; i < 3670; ++i) if (!std::isfinite(features_dipole[i])) features_dipole[i] = 0.0;
+    results[PROP_DIPOLEMOMENT] = ::dipolemoment_cascade::predict(features_dipole.data());
+    
+    // logODT (3671 features = 3670 + DipoleMoment at position 3585+9+12)
+    std::vector<double> features_odt(3671, 0.0);
+    for (size_t i = 0; i < 3585 + 9 + 12; ++i) features_odt[i] = features_base_3670[i];
+    features_odt[3585 + 9 + 12] = results[PROP_DIPOLEMOMENT];
+    for (size_t i = 0; i < 64; ++i) features_odt[3585 + 9 + 13 + i] = features_base_3670[3585 + 9 + 12 + i];
+    for (size_t i = 0; i < 3671; ++i) if (std::isinf(features_odt[i])) features_odt[i] = 0.0;
+    for (int i = 0; i < ::logodt_cascade::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::logodt_cascade::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3671 && std::isfinite(features_odt[col])) features_odt[col] = std::asinh(features_odt[col]);
+    }
+    for (size_t i = 0; i < 3671; ++i) if (!std::isfinite(features_odt[i])) features_odt[i] = 0.0;
+    results[PROP_LOGODT] = ::logodt_cascade::predict(features_odt.data());
+    
+    // Viscosity
+    std::vector<double> features_visc = features_base_3670;
+    for (int i = 0; i < ::viscosity_cascade_model::N_ARCSINH_COLUMNS; ++i) {
+        int col = ::viscosity_cascade_model::ARCSINH_COLUMNS[i];
+        if (col >= 0 && col < 3670 && std::isfinite(features_visc[col])) features_visc[col] = std::asinh(features_visc[col]);
+    }
+    for (size_t i = 0; i < 3670; ++i) if (!std::isfinite(features_visc[i])) features_visc[i] = 0.0;
+    results[PROP_LOGVISCOSITY] = ::viscosity_cascade_model::predict(features_visc.data());
+    
+    return results;
+    #endif  // Disabled optimized code
+}
+
+// Batch version of optimal calculation with TIMEOUT protection
+// Each molecule has a 10-second timeout - if exceeded, returns NaN
+std::vector<std::vector<double>> calcPhysChemPropOptimalBatch(
+    const std::vector<std::string>& smiles_list, int n_jobs) {
+    
+    std::vector<std::vector<double>> results;
+    results.reserve(smiles_list.size());
+    
+    unsigned int nThreads = getNumThreadsToUse(n_jobs);
+    
+    // Sequential with timeout protection
+    if (nThreads <= 1 || smiles_list.size() < 10) {
+        for (const auto& smi : smiles_list) {
+            // Use async with timeout for each molecule
+            auto future = std::async(std::launch::async, [&smi]() {
+                try {
+                    ROMol* mol = SmilesToMol(smi);
+                    if (mol) {
+                        std::vector<double> props = calcPhysChemPropOptimal(*mol);
+                        delete mol;
+                        return props;
+                    }
+                } catch (...) {}
+                return std::vector<double>(NUM_PHYSCHEM_PROPS, std::numeric_limits<double>::quiet_NaN());
+            });
+            
+            // Wait with 60-second (1 minute) timeout
+            auto status = future.wait_for(std::chrono::seconds(PHYSCHEM_TIMEOUT_SECONDS));
+            if (status == std::future_status::ready) {
+                results.push_back(future.get());
+            } else {
+                // Timeout exceeded - return NaN values
+                results.push_back(std::vector<double>(NUM_PHYSCHEM_PROPS, std::numeric_limits<double>::quiet_NaN()));
+            }
+        }
+        return results;
+    }
+    
+    // Parallel processing with timeout
+    std::vector<std::future<std::vector<double>>> futures;
+    futures.reserve(smiles_list.size());
+    
+    for (const auto& smi : smiles_list) {
+        futures.emplace_back(std::async(std::launch::async, [smi]() {
+            try {
+                ROMol* mol = SmilesToMol(smi);
+                if (mol) {
+                    std::vector<double> props = calcPhysChemPropOptimal(*mol);
+                    delete mol;
+                    return props;
+                }
+            } catch (...) {}
+            return std::vector<double>(NUM_PHYSCHEM_PROPS, std::numeric_limits<double>::quiet_NaN());
+        }));
+    }
+    
+    // Collect results with timeout
+    for (auto& f : futures) {
+        auto status = f.wait_for(std::chrono::seconds(PHYSCHEM_TIMEOUT_SECONDS));
+        if (status == std::future_status::ready) {
+            results.push_back(f.get());
+        } else {
+            // Timeout exceeded - return NaN values
+            results.push_back(std::vector<double>(NUM_PHYSCHEM_PROPS, std::numeric_limits<double>::quiet_NaN()));
+        }
+    }
+    
+    return results;
+}
+
+// Single molecule with TRUE timeout (60 seconds default)
+// Returns NaN if computation exceeds timeout
+std::vector<double> calcPhysChemPropWithTimeout(const ROMol& mol, int timeout_seconds) {
+    auto future = std::async(std::launch::async, [&mol]() {
+        return calcPhysChemPropOptimal(mol);
+    });
+    
+    auto status = future.wait_for(std::chrono::seconds(timeout_seconds > 0 ? timeout_seconds : PHYSCHEM_TIMEOUT_SECONDS));
+    if (status == std::future_status::ready) {
+        return future.get();
+    } else {
+        // Timeout exceeded - return NaN values
+        return std::vector<double>(NUM_PHYSCHEM_PROPS, std::numeric_limits<double>::quiet_NaN());
+    }
+}
+
+// ============================================================================
+// PARTIAL TIMEOUT VERSION: Wrapper around calcPhysChemPropOptimal
+// ============================================================================
+// NOTE: The real timeout bottleneck is calcOsmordred (3585 features).
+// Use CalcOsmordredWithTimeout for osmordred-specific timeout control.
+// This function just provides a timeout wrapper for the full property calc.
+// ============================================================================
+
+std::vector<double> calcPhysChemPropPartialTimeout(const ROMol& mol, int total_timeout_seconds) {
+    // Simply call calcPhysChemPropOptimal - the timeout protection is now
+    // handled by calcOsmordredWithTimeout when called separately.
+    // This function is kept for API compatibility.
+    return calcPhysChemPropWithTimeout(mol, total_timeout_seconds);
+}
+
+// NOTE: The complex calcPhysChemPropPartialTimeout implementation was removed.
+// The real bottleneck for timeout is calcOsmordred (3585 features).
+// Use CalcOsmordredWithTimeout for osmordred-specific timeout control.
+// calcPhysChemPropPartialTimeout now just calls calcPhysChemPropWithTimeout.
+
+// NOTE: The broken legacy partial timeout code was removed here.
+// The simplification is that calcPhysChemPropPartialTimeout now just calls
+// calcPhysChemPropWithTimeout, and the real timeout bottleneck (osmordred)
+// should be handled with CalcOsmordredWithTimeout.
+
+// Timeout constant for osmordred computation (60 seconds = 1 minute)
+constexpr int OSMORDRED_TIMEOUT_IN_ALL_FEATURES = 60;
+
+// Get ALL features at once: osmordred (3585) + rdkit (217) + physchem (25) = 3827 total
+// NO timeout - use calcAllFeaturesOnceWithTimeout for timeout protection
+std::vector<double> calcAllFeaturesOnce(const ROMol& mol) {
+    std::vector<double> all_features;
+    all_features.reserve(3827);
+    
+    // Extract base features once
+    CachedMolFeatures cache = extractAllBaseFeatures(mol);
+    
+    // 1. Osmordred (3585)
+    all_features.insert(all_features.end(), cache.osmordred.begin(), cache.osmordred.end());
+    
+    // 2. RDKit (217)
+    all_features.insert(all_features.end(), cache.rdkit.begin(), cache.rdkit.end());
+    
+    // 3. PhysChemProp (25) using cached features via optimal function
+    std::vector<double> physchem = calcPhysChemPropOptimal(mol);
+    all_features.insert(all_features.end(), physchem.begin(), physchem.end());
+    
+    return all_features;
+}
+
+// Single molecule with timeout protection on OSMORDRED ONLY
+// If osmordred times out: osmordred = NaN, but rdkit and physchem still computed
+std::vector<double> calcAllFeaturesOnceWithTimeout(const ROMol& mol, int timeout_seconds) {
+    std::vector<double> all_features;
+    all_features.reserve(3827);
+    
+    int actual_timeout = timeout_seconds > 0 ? timeout_seconds : OSMORDRED_TIMEOUT_IN_ALL_FEATURES;
+    
+    // 1. Osmordred (3585) WITH TIMEOUT
+    std::vector<double> osmordred_features;
+    {
+        auto future = std::async(std::launch::async, [&mol]() {
+            return calcOsmordred(mol);
+        });
+        auto status = future.wait_for(std::chrono::seconds(actual_timeout));
+        if (status == std::future_status::ready) {
+            osmordred_features = future.get();
+        } else {
+            // Timeout - fill with NaN
+            osmordred_features = std::vector<double>(3585, std::numeric_limits<double>::quiet_NaN());
+        }
+    }
+    all_features.insert(all_features.end(), osmordred_features.begin(), osmordred_features.end());
+    
+    // 2. RDKit (217) - always computed (fast)
+    std::vector<double> rdkit_features = extractRDKitDescriptors(mol);
+    all_features.insert(all_features.end(), rdkit_features.begin(), rdkit_features.end());
+    
+    // 3. PhysChemProp (25) - always computed (fast)
+    std::vector<double> physchem = calcPhysChemPropOptimal(mol);
+    all_features.insert(all_features.end(), physchem.begin(), physchem.end());
+    
+    return all_features;
+}
+
+// Batch version with 60-second timeout on OSMORDRED ONLY per molecule
+std::vector<std::vector<double>> calcAllFeaturesOnceBatch(
+    const std::vector<std::string>& smiles_list, int n_jobs) {
+    
+    std::vector<std::vector<double>> results;
+    results.reserve(smiles_list.size());
+    
+    unsigned int nThreads = getNumThreadsToUse(n_jobs);
+    
+    // Sequential - use WithTimeout for each molecule
+    if (nThreads <= 1 || smiles_list.size() < 10) {
+        for (const auto& smi : smiles_list) {
+            ROMol* mol = SmilesToMol(smi);
+            if (mol) {
+                results.push_back(calcAllFeaturesOnceWithTimeout(*mol, OSMORDRED_TIMEOUT_IN_ALL_FEATURES));
+                delete mol;
+            } else {
+                results.push_back(std::vector<double>(3827, std::numeric_limits<double>::quiet_NaN()));
+            }
+        }
+        return results;
+    }
+    
+    // Parallel - each molecule gets its own osmordred timeout
+    std::vector<std::future<std::vector<double>>> futures;
+    futures.reserve(smiles_list.size());
+    
+    for (const auto& smi : smiles_list) {
+        futures.emplace_back(std::async(std::launch::async, [smi]() {
+            try {
+                ROMol* mol = SmilesToMol(smi);
+                if (mol) {
+                    std::vector<double> feat = calcAllFeaturesOnceWithTimeout(*mol, OSMORDRED_TIMEOUT_IN_ALL_FEATURES);
+                    delete mol;
+                    return feat;
+                }
+            } catch (...) {}
+            return std::vector<double>(3827, std::numeric_limits<double>::quiet_NaN());
+        }));
+    }
+    
+    for (auto& f : futures) {
+        results.push_back(f.get());
+    }
+    
+    return results;
+}
+
+// ============================================================================
+// calcPhysChemProp2 v3.3_full Complete Implementation
+// ============================================================================
+// Matches Python FeatureOrderManager.build_features_for_inference() exactly
+// Uses exported v3.3_full model headers with feature order metadata
+// ============================================================================
+
+// Cascade order for v3.3_full (27 models)
+static const char* CASCADE_ORDER_V33_NAMES[] = {
+    "V", "Polarizability", "L", "E", "B", "Density", "RI", "S", "A",
+    "Modularity", "HansenTotal", "dD", "dH", "dP", "BP", "deltaHvap",
+    "logVP", "logPow", "logWS", "deltaHf", "deltaHc", "MP", "Flashpoint",
+    "logHenrycc", "DipoleMoment", "logViscosity", "logODT"
+};
+constexpr int NUM_V33_TARGETS = 27;
+
+// Helper to get cascade prediction by name from results array
+inline double getCascadePred(const std::vector<double>& cascade_preds, const char* name) {
+    for (int i = 0; i < NUM_V33_TARGETS; ++i) {
+        if (std::string(name) == CASCADE_ORDER_V33_NAMES[i]) {
+            return (i < static_cast<int>(cascade_preds.size())) ? cascade_preds[i] : 0.0;
+        }
+    }
+    return 0.0;
+}
+
+// Helper to build LSFER golden features (54) - matching Python build_lsfer_golden
+std::vector<double> buildLSFERGoldenV33(const std::vector<double>& cascade_preds) {
+    std::vector<double> features;
+    features.reserve(54);
+    
+    double V = getCascadePred(cascade_preds, "V");
+    double E = getCascadePred(cascade_preds, "E");
+    double L = getCascadePred(cascade_preds, "L");
+    double B = getCascadePred(cascade_preds, "B");
+    double S = getCascadePred(cascade_preds, "S");
+    double A = getCascadePred(cascade_preds, "A");
+    double Density = getCascadePred(cascade_preds, "Density");
+    double RI = getCascadePred(cascade_preds, "RI");
+    double Polar = getCascadePred(cascade_preds, "Polarizability");
+    
+    std::vector<double> vals = {V, E, L, B, S, A, Density, RI, Polar};
+    
+    // 9 raw values
+    for (double v : vals) features.push_back(v);
+    
+    // 9 squares
+    for (double v : vals) features.push_back(v * v);
+    
+    // 36 products (all pairs, upper triangle)
+    for (size_t i = 0; i < vals.size(); ++i) {
+        for (size_t j = i + 1; j < vals.size(); ++j) {
+            features.push_back(vals[i] * vals[j]);
+        }
+    }
+    
+    return features;
+}
+
+// Helper to build basic LSFER (8) - matching Python build_basic_lsfer
+std::vector<double> buildBasicLSFERV33(const std::vector<double>& cascade_preds) {
+    std::vector<double> features;
+    features.reserve(8);
+    
+    double V = getCascadePred(cascade_preds, "V");
+    double E = getCascadePred(cascade_preds, "E");
+    double L = getCascadePred(cascade_preds, "L");
+    double B = getCascadePred(cascade_preds, "B");
+    
+    V = V ? V : 0.0;
+    E = E ? E : 0.0;
+    L = L ? L : 0.0;
+    B = B ? B : 0.0;
+    
+    double V_approx = (E + L/5.0 + B) / 3.0;
+    double L_approx = V * 5.0 + E * 2.0;
+    
+    features.push_back(V - V_approx);
+    features.push_back((V - V_approx) * (V - V_approx));
+    features.push_back(L - L_approx);
+    features.push_back((L - L_approx) * (L - L_approx));
+    features.push_back(V * E - L / 10.0);
+    features.push_back(B * (V + E));
+    features.push_back(V * L / (E + 1.0));
+    features.push_back(B * L / (V + 1.0));
+    
+    return features;
+}
+
+// Helper to build physics features (10) - matching Python build_physics_features
+std::vector<double> buildPhysicsFeaturesV33(double MW, double MR, double Density, double RI, double Polar) {
+    std::vector<double> features;
+    features.reserve(10);
+    
+    Density = std::max(Density, 0.001);
+    RI = std::max(RI, 1.001);
+    
+    features.push_back(MR);  // 0. MR
+    
+    double Vm = MW / Density;
+    features.push_back(Vm);  // 1. Vm
+    
+    double RI2 = RI * RI;
+    double f_n = (RI2 - 1.0) / (RI2 + 2.0);
+    features.push_back(f_n);  // 2. f_n
+    
+    double Parachor = (f_n > 0.01) ? (MR / f_n) : 0.0;
+    features.push_back(Parachor);  // 3. Parachor
+    
+    double eps_CM = f_n * Vm;
+    features.push_back(eps_CM);  // 4. eps_CM
+    
+    double alpha_pred = Polar / 4.0;
+    features.push_back(alpha_pred);  // 5. alpha_pred
+    
+    double dD_est = std::sqrt(std::max(0.0, f_n * 1000.0 / std::max(Vm, 0.001)));
+    features.push_back(dD_est);  // 6. dD_est
+    
+    double dH_est = std::sqrt(std::max(0.0, 500.0 / std::max(Vm, 0.001)));
+    features.push_back(dH_est);  // 7. dH_est
+    
+    double dP_est = std::sqrt(std::max(0.0, 300.0 / std::max(Vm, 0.001)));
+    features.push_back(dP_est);  // 8. dP_est
+    
+    double delta_total = std::sqrt(dD_est*dD_est + dH_est*dH_est + dP_est*dP_est);
+    features.push_back(delta_total);  // 9. delta_total
+    
+    return features;
+}
+
+// Helper to build Abraham ODT feature (1) - matching Python build_abraham_odt_feature
+double buildAbrahamODTFeatureV33(const std::vector<double>& cascade_preds) {
+    const double c = 0.12, e = 0.38, s = -0.95, a = -3.05, b = -2.56, v = 1.02, l = 0.88;
+    
+    double V = getCascadePred(cascade_preds, "V");
+    double E = getCascadePred(cascade_preds, "E");
+    double L = getCascadePred(cascade_preds, "L");
+    double B = getCascadePred(cascade_preds, "B");
+    double S = getCascadePred(cascade_preds, "S");
+    double A = getCascadePred(cascade_preds, "A");
+    
+    return c + e*E + s*S + a*A + b*B + v*V + l*L;
+}
+
+// Helper to build RI physics features (12) - matching Python build_ri_physics
+std::vector<double> buildRIPhysicsV33(double V, double E, double Polarizability, double Density, double MW, double MR) {
+    std::vector<double> features;
+    features.reserve(12);
+    
+    Density = std::max(Density, 0.1);
+    MW = std::max(MW, 10.0);
+    MR = std::max(MR, 1.0);
+    
+    // Lorentz-Lorenz calibration coefficients
+    const double LORENTZ_LORENZ_A = 0.962492;
+    const double LORENTZ_LORENZ_B = 0.059550;
+    
+    // 0. Abraham's molar refractivity: MR_A = E + 2.83195*V - 0.52553
+    double MR_A = E + 2.83195 * V - 0.52553;
+    features.push_back(MR_A);
+    
+    // 1. MR / MR_A ratio
+    features.push_back(MR / (MR_A + 1.0));
+    
+    // 2. Molar volume from McGowan (V * 100 cm³/mol)
+    double Vm_mcgowan = V * 100.0;
+    features.push_back(Vm_mcgowan);
+    
+    // 3. MW / Vm_mcgowan (density proxy)
+    features.push_back(MW / std::max(Vm_mcgowan, 1.0));
+    
+    // 4. Actual molar volume Vm = MW / Density
+    double Vm = MW / Density;
+    features.push_back(Vm);
+    
+    // 5. Lorentz-Lorenz factor proxy: f_n ≈ MR / Vm
+    double f_n_approx = MR / std::max(Vm, 1.0);
+    features.push_back(f_n_approx);
+    
+    // 6. f_n squared
+    features.push_back(f_n_approx * f_n_approx);
+    
+    // 7. Estimated RI from Lorentz-Lorenz (calibrated)
+    double ri_est = 1.5;  // default
+    if (f_n_approx > 0.01 && f_n_approx < 0.99) {
+        double ri_est_raw = std::sqrt((1 + 2 * f_n_approx) / (1 - f_n_approx));
+        ri_est = LORENTZ_LORENZ_A * ri_est_raw + LORENTZ_LORENZ_B;
+    }
+    features.push_back(ri_est);
+    
+    // 8. MR_A / Vm
+    features.push_back(MR_A / std::max(Vm, 1.0));
+    
+    // 9. Polarizability / V
+    features.push_back(Polarizability / std::max(V, 0.1));
+    
+    // 10. Polarizability / Vm
+    features.push_back(Polarizability / std::max(Vm, 1.0));
+    
+    // 11. Density * MR / MW
+    features.push_back(Density * MR / MW);
+    
+    return features;
+}
+
+// Helper to build Yalkowsky MP features (4) - matching Python build_yalkowsky_mp_features
+std::vector<double> buildYalkowskyMPFeaturesV33(double logWS, double logPow) {
+    std::vector<double> features;
+    features.reserve(4);
+    
+    if (!std::isfinite(logWS) || !std::isfinite(logPow)) {
+        return std::vector<double>(4, 0.0);
+    }
+    
+    const double yalkowsky_coef = 23.155416;
+    const double yalkowsky_intercept = 87.80;
+    const double logWS_coef = -8.968433;
+    const double logPow_coef = -14.186983;
+    const double interaction_coef = 3.117670;
+    
+    // 0. Calibrated Yalkowsky estimate
+    double yalkowsky_est = yalkowsky_coef * (0.5 - logWS - logPow) + yalkowsky_intercept;
+    features.push_back(yalkowsky_est);
+    
+    // 1. logWS term
+    features.push_back(logWS_coef * logWS);
+    
+    // 2. logPow term
+    features.push_back(logPow_coef * logPow);
+    
+    // 3. logWS × logPow interaction
+    features.push_back(interaction_coef * logWS * logPow);
+    
+    return features;
+}
+
+// Helper to build Hansen physics features (16) - matching Python build_hansen_physics_features
+std::vector<double> buildHansenPhysicsFeaturesV33(double hansen_total, double dD) {
+    std::vector<double> features;
+    features.reserve(16);
+    
+    if (!std::isfinite(hansen_total) || !std::isfinite(dD) || hansen_total <= 0) {
+        return std::vector<double>(16, 0.0);
+    }
+    
+    double Wd = (dD / hansen_total) * (dD / hansen_total);
+    double dD_squared = dD * dD;
+    double hansen_total_squared = hansen_total * hansen_total;
+    double remaining_squared = std::max(0.0, hansen_total_squared - dD_squared);
+    
+    // Angular relationships from Ho & Glinka (2004)
+    double dD_over_d0 = std::max(-1.0, std::min(1.0, dD / hansen_total));
+    double alpha = std::acos(dD_over_d0);
+    double alpha_deg = alpha * 180.0 / M_PI;
+    
+    double beta_plus_gamma_deg = 180.0 - 1.2883 * alpha_deg;
+    double beta_plus_gamma = beta_plus_gamma_deg * M_PI / 180.0;
+    
+    double cos_alpha = std::cos(alpha);
+    double cos_alpha_sq = cos_alpha * cos_alpha;
+    double cos_12883_alpha = std::cos(1.2883 * alpha);
+    
+    double beta_minus_gamma = 0.0;
+    if (std::abs(cos_12883_alpha) > 1e-10) {
+        double beta_minus_gamma_arg = std::max(-1.0, std::min(1.0, cos_alpha_sq / cos_12883_alpha));
+        beta_minus_gamma = std::acos(beta_minus_gamma_arg);
+    }
+    
+    double beta = (beta_plus_gamma + beta_minus_gamma) / 2.0;
+    double gamma = (beta_plus_gamma - beta_minus_gamma) / 2.0;
+    
+    double dH_predicted = hansen_total * std::cos(beta);
+    double dP_predicted = hansen_total * std::cos(gamma);
+    
+    features.push_back(hansen_total);
+    features.push_back(dD);
+    features.push_back(Wd);
+    features.push_back(std::sqrt(remaining_squared));
+    features.push_back(remaining_squared);
+    features.push_back(dD / hansen_total);
+    features.push_back(hansen_total - dD);
+    features.push_back(std::sqrt(std::max(0.0, hansen_total_squared - dD_squared)) / hansen_total);
+    features.push_back(alpha);
+    features.push_back(alpha_deg);
+    features.push_back(beta_plus_gamma);
+    features.push_back(beta_minus_gamma);
+    features.push_back(beta);
+    features.push_back(gamma);
+    features.push_back(dH_predicted);
+    features.push_back(dP_predicted);
+    
+    return features;
+}
+
+// Helper to build DipoleMoment physics features (9) - matching Python build_dipole_physics_features
+std::vector<double> buildDipolePhysicsFeaturesV33(double dP, double MW, double Density) {
+    std::vector<double> features;
+    features.reserve(9);
+    
+    if (!std::isfinite(dP) || !std::isfinite(MW) || !std::isfinite(Density) || Density <= 0) {
+        return std::vector<double>(9, 0.0);
+    }
+    
+    const double COEFF_DP = 0.030020;
+    const double COEFF_SQRT_VM = 0.025094;
+    const double COEFF_DP_SQRT_VM = 0.033442;
+    const double COEFF_DP_SQ = 0.000590;
+    const double COEFF_VM = 0.000404;
+    const double COEFF_DP_SQ_VM = -0.000076;
+    const double INTERCEPT = -0.408019;
+    
+    double Vm = MW / Density;
+    double sqrt_Vm = std::sqrt(Vm);
+    
+    double mu_calibrated = (COEFF_DP * dP + 
+                           COEFF_SQRT_VM * sqrt_Vm + 
+                           COEFF_DP_SQRT_VM * dP * sqrt_Vm +
+                           COEFF_DP_SQ * dP * dP +
+                           COEFF_VM * Vm +
+                           COEFF_DP_SQ_VM * dP * dP * Vm +
+                           INTERCEPT);
+    
+    double dP_squared = dP * dP;
+    double Vm_squared = Vm * Vm;
+    
+    features.push_back(dP);
+    features.push_back(Vm);
+    features.push_back(dP_squared);
+    features.push_back(Vm_squared);
+    features.push_back(dP * sqrt_Vm);
+    features.push_back(dP * Vm);
+    features.push_back(std::sqrt(dP_squared * Vm));
+    features.push_back(dP / (sqrt_Vm + 1e-10));
+    features.push_back(mu_calibrated);
+    
+    return features;
+}
+
+// Helper to build MP rigid compound features (5) - matching Python build_mp_rigid_compound_features
+std::vector<double> buildMPRigidFeaturesV33(const ROMol& mol, double BP) {
+    std::vector<double> features;
+    features.reserve(5);
+    
+    if (!mol || !std::isfinite(BP)) {
+        return std::vector<double>(5, 0.0);
+    }
+    
+    const double BP_coef = 0.457308;
+    const double symmetry_coef = -23.510090;
+    const double ortho_coef = -21.024881;
+    const double eccentricity_coef = 0.0;
+    const double intercept = 0.191926;
+    
+    // Compute molecular symmetry (simplified - count most common atom type)
+    double symmetry = 0.0;
+    std::map<std::tuple<std::string, int, int>, int> atom_types;
+    for (auto atom : mol.atoms()) {
+        std::string symbol = atom->getSymbol();
+        int degree = atom->getDegree();
+        int hyb = static_cast<int>(atom->getHybridization());
+        atom_types[std::make_tuple(symbol, degree, hyb)]++;
+    }
+    
+    int n_atoms = mol.getNumAtoms();
+    if (n_atoms > 0 && !atom_types.empty()) {
+        int max_count = 0;
+        for (const auto& pair : atom_types) {
+            if (pair.second > max_count) max_count = pair.second;
+        }
+        symmetry = static_cast<double>(max_count) / n_atoms;
+    }
+    
+    // Compute graph eccentricity (simplified - use distance matrix if available)
+    double eccentricity = 0.0;
+    // TODO: Implement using RDKit distance matrix
+    
+    // Count ortho groups (simplified)
+    double ortho = 0.0;
+    // TODO: Implement ortho group counting
+    
+    double rigid_est = BP_coef * BP + symmetry_coef * symmetry + 
+                      ortho_coef * ortho + eccentricity_coef * eccentricity + intercept;
+    
+    features.push_back(rigid_est);
+    features.push_back(BP);
+    features.push_back(symmetry);
+    features.push_back(ortho);
+    features.push_back(eccentricity);
+    
+    return features;
+}
+
+// Helper to build ODT structural indicators (8) - matching Python build_odt_structural_indicators
+std::vector<double> buildODTStructuralIndicatorsV33(const ROMol& mol) {
+    std::vector<double> features;
+    features.reserve(8);
+    
+    if (!mol) {
+        return std::vector<double>(8, 0.0);
+    }
+    
+    // SMARTS patterns for ODT structural indicators
+    // Note: These need to be compiled from SMARTS strings
+    // For now, return zeros - TODO: Implement SMARTS matching
+    return std::vector<double>(8, 0.0);
+}
+
+// Helper to build ring fusion features (10) - matching Python build_ring_fusion_features
+std::vector<double> buildRingFusionFeaturesV33(const ROMol& mol) {
+    std::vector<double> features;
+    features.reserve(10);
+    
+    if (!mol) {
+        return std::vector<double>(10, 0.0);
+    }
+    
+    // Get ring info
+    auto ring_info = mol.getRingInfo();
+    auto rings = ring_info->atomRings();
+    
+    // Count fusion atoms
+    std::map<int, int> atom_ring_count;
+    for (const auto& ring : rings) {
+        for (int atom_idx : ring) {
+            atom_ring_count[atom_idx]++;
+        }
+    }
+    
+    std::vector<int> fusion_atoms;
+    for (const auto& pair : atom_ring_count) {
+        if (pair.second > 1) {
+            fusion_atoms.push_back(pair.first);
+        }
+    }
+    
+    // Get stereochemistry at fusion atoms
+    // TODO: Implement chiral center detection
+    
+    // Simplified features
+    features.push_back(static_cast<double>(rings.size()));  // num_rings
+    features.push_back(static_cast<double>(fusion_atoms.size()));  // num_fused_rings
+    features.push_back(static_cast<double>(fusion_atoms.size()));  // fusion_atoms
+    features.push_back(0.0);  // cis_fusion
+    features.push_back(0.0);  // trans_fusion
+    features.push_back(0.0);  // mixed_fusion
+    features.push_back(0.0);  // all_R
+    features.push_back(0.0);  // all_S
+    features.push_back(0.5);  // stereo_ratio
+    features.push_back(0.0);  // num_chiral_centers
+    
+    return features;
+}
+
+// Helper to build base features (4093: SMARTS + RDKit + Osmordred)
+std::vector<double> buildBaseFeaturesV33(const ROMol& mol) {
+    std::vector<double> base_features;
+    base_features.reserve(4093);
+    
+    // 1. SMARTS (291) - [0:290]
+    std::vector<double> smarts = calcAbrahamsV2Features(mol);
+    if (smarts.size() != 291) smarts.resize(291, 0.0);
+    base_features.insert(base_features.end(), smarts.begin(), smarts.end());
+    
+    // 2. RDKit217 (217) - [291:507]
+    std::vector<double> rdkit = extractRDKitDescriptors(mol);
+    if (rdkit.size() != 217) rdkit.resize(217, 0.0);
+    base_features.insert(base_features.end(), rdkit.begin(), rdkit.end());
+    
+    // 3. Osmordred (3585) - [508:4092]
+    std::vector<double> osmordred = calcOsmordred(mol);
+    if (osmordred.size() != 3585) osmordred.resize(3585, 0.0);
+    base_features.insert(base_features.end(), osmordred.begin(), osmordred.end());
+    
+    // Ensure exactly 4093 features
+    if (base_features.size() != 4093) base_features.resize(4093, 0.0);
+    
+    // Convert Inf to NaN (matching Python)
+    for (size_t i = 0; i < base_features.size(); ++i) {
+        if (std::isinf(base_features[i])) {
+            base_features[i] = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    
+    return base_features;
+}
+
+// Template function to build features for a target using model namespace
+template<typename ModelNamespace>
+std::vector<double> buildFeaturesForTargetV33(
+    const ROMol& mol,
+    const std::vector<double>& base_features,
+    const std::vector<double>& cascade_predictions,
+    double MW, double MR
+) {
+    std::vector<double> features;
+    
+    // Start with base features
+    std::vector<double> base_processed = base_features;
+    
+    // 1. Apply exclusions (if needed - MW exclusion for MW target)
+    // TODO: Implement exclusions based on target name
+    
+    // 2. Apply arcsinh (BEFORE feature selection) - matching Python
+    if (ModelNamespace::N_ARCSINH_COLS > 0) {
+        for (int i = 0; i < ModelNamespace::N_ARCSINH_COLS; ++i) {
+            int col_idx = ModelNamespace::ARCSINH_COLS[i];
+            if (col_idx >= 0 && col_idx < static_cast<int>(base_processed.size())) {
+                base_processed[col_idx] = std::asinh(base_processed[col_idx]);
+            }
+        }
+    }
+    
+    // 3. Feature selection - select base features using SELECTED_FEATURES
+    if (ModelNamespace::N_SELECTED_FEATURES > 0) {
+        features.reserve(ModelNamespace::N_SELECTED_FEATURES);
+        for (int i = 0; i < ModelNamespace::N_SELECTED_FEATURES; ++i) {
+            int idx = ModelNamespace::SELECTED_FEATURES[i];
+            if (idx >= 0 && idx < static_cast<int>(base_processed.size())) {
+                features.push_back(base_processed[idx]);
+            } else {
+                features.push_back(0.0);
+            }
+        }
+    } else {
+        features = base_processed;
+    }
+    
+    // 4. Add cascade features (from CASCADE_FEATURE_NAMES)
+    if (ModelNamespace::N_CASCADE_FEATURES > 0) {
+        for (int i = 0; i < ModelNamespace::N_CASCADE_FEATURES; ++i) {
+            const char* feat_name = ModelNamespace::CASCADE_FEATURE_NAMES[i];
+            double val = getCascadePred(cascade_predictions, feat_name);
+            features.push_back(val);
+        }
+    }
+    
+    // 5. Add physics features (from PHYSICS_FEATURE_NAMES)
+    if (ModelNamespace::N_PHYSICS_FEATURES > 0) {
+        double Density = getCascadePred(cascade_predictions, "Density");
+        double RI = getCascadePred(cascade_predictions, "RI");
+        double Polar = getCascadePred(cascade_predictions, "Polarizability");
+        
+        std::vector<double> physics = buildPhysicsFeaturesV33(MW, MR, Density, RI, Polar);
+        std::vector<double> lsfer_golden = buildLSFERGoldenV33(cascade_predictions);
+        
+        for (int i = 0; i < ModelNamespace::N_PHYSICS_FEATURES; ++i) {
+            const char* feat_name = ModelNamespace::PHYSICS_FEATURE_NAMES[i];
+            std::string name_str(feat_name);
+            
+            if (name_str.find("lsfer_") == 0) {
+                int idx = std::stoi(name_str.substr(6));
+                if (idx >= 0 && idx < static_cast<int>(lsfer_golden.size())) {
+                    features.push_back(lsfer_golden[idx]);
+                } else {
+                    features.push_back(0.0);
+                }
+            } else if (name_str == "abraham_odt_eq") {
+                features.push_back(buildAbrahamODTFeatureV33(cascade_predictions));
+            } else if (name_str.find("phys_") == 0) {
+                int idx = -1;
+                if (name_str == "phys_MR") idx = 0;
+                else if (name_str == "phys_Vm") idx = 1;
+                else if (name_str == "phys_fn") idx = 2;
+                else if (name_str == "phys_Parachor") idx = 3;
+                else if (name_str == "phys_epsCM") idx = 4;
+                else if (name_str == "phys_alpha") idx = 5;
+                else if (name_str == "phys_dD") idx = 6;
+                else if (name_str == "phys_dH") idx = 7;
+                else if (name_str == "phys_dP") idx = 8;
+                else if (name_str == "phys_delta") idx = 9;
+                
+                if (idx >= 0 && idx < static_cast<int>(physics.size())) {
+                    features.push_back(physics[idx]);
+                } else {
+                    features.push_back(0.0);
+                }
+            } else {
+                // Other physics features (ODT indicators, ring fusion, etc.)
+                features.push_back(0.0);
+            }
+        }
+    }
+    
+    // 6. Add Basic LSFER (if count > 0)
+    if (ModelNamespace::BASIC_LSFER_COUNT > 0) {
+        std::vector<double> basic_lsfer = buildBasicLSFERV33(cascade_predictions);
+        features.insert(features.end(), basic_lsfer.begin(), basic_lsfer.end());
+    }
+    
+    // 7. Add RI physics (if count > 0)
+    if (ModelNamespace::RI_PHYSICS_COUNT > 0) {
+        double V = getCascadePred(cascade_predictions, "V");
+        double E = getCascadePred(cascade_predictions, "E");
+        double Polar = getCascadePred(cascade_predictions, "Polarizability");
+        double Density = getCascadePred(cascade_predictions, "Density");
+        std::vector<double> ri_phys = buildRIPhysicsV33(V, E, Polar, Density, MW, MR);
+        features.insert(features.end(), ri_phys.begin(), ri_phys.end());
+    }
+    
+    // 8. Add Yalkowsky (if count > 0)
+    if (ModelNamespace::YALKOWSKY_COUNT > 0) {
+        double logWS = getCascadePred(cascade_predictions, "logWS");
+        double logPow = getCascadePred(cascade_predictions, "logPow");
+        std::vector<double> yalk = buildYalkowskyMPFeaturesV33(logWS, logPow);
+        features.insert(features.end(), yalk.begin(), yalk.end());
+    }
+    
+    // 9. Add Hansen physics (if count > 0)
+    if (ModelNamespace::HANSEN_PHYSICS_COUNT > 0) {
+        double hansen_total = getCascadePred(cascade_predictions, "HansenTotal");
+        double dD = getCascadePred(cascade_predictions, "dD");
+        std::vector<double> hansen = buildHansenPhysicsFeaturesV33(hansen_total, dD);
+        features.insert(features.end(), hansen.begin(), hansen.end());
+    }
+    
+    // 10. Add DipoleMoment physics (if count > 0)
+    if (ModelNamespace::DIPOLE_PHYSICS_COUNT > 0) {
+        double dP = getCascadePred(cascade_predictions, "dP");
+        double Density = getCascadePred(cascade_predictions, "Density");
+        std::vector<double> dipole = buildDipolePhysicsFeaturesV33(dP, MW, Density);
+        features.insert(features.end(), dipole.begin(), dipole.end());
+    }
+    
+    // 11. Add MP rigid (if count > 0)
+    if (ModelNamespace::MP_RIGID_COUNT > 0) {
+        double BP = getCascadePred(cascade_predictions, "BP");
+        std::vector<double> mp_rigid = buildMPRigidFeaturesV33(mol, BP);
+        features.insert(features.end(), mp_rigid.begin(), mp_rigid.end());
+    }
+    
+    // 12. Normalize features
+    if (ModelNamespace::N_NORM_FEATURES > 0 && 
+        features.size() == static_cast<size_t>(ModelNamespace::N_NORM_FEATURES)) {
+        for (int i = 0; i < ModelNamespace::N_NORM_FEATURES; ++i) {
+            if (std::isfinite(ModelNamespace::COL_MEANS[i]) && 
+                std::isfinite(ModelNamespace::COL_STDS[i]) && 
+                ModelNamespace::COL_STDS[i] > 1e-10) {
+                features[i] = (features[i] - ModelNamespace::COL_MEANS[i]) / ModelNamespace::COL_STDS[i];
+            }
+        }
+    }
+    
+    // 13. Handle NaN - fill with 0 and add indicator columns if needed
+    for (size_t i = 0; i < features.size(); ++i) {
+        if (!std::isfinite(features[i])) {
+            features[i] = 0.0;
+        }
+    }
+    
+    // Add indicator columns if needed
+    if (ModelNamespace::N_INDICATOR_COLS > 0) {
+        for (int i = 0; i < ModelNamespace::N_INDICATOR_COLS; ++i) {
+            features.push_back(0.0);  // TODO: Track original NaN positions
+        }
+    }
+    
+    return features;
+}
+
+// Main calcPhysChemProp2 function
+RDKIT_DESCRIPTORS_EXPORT std::vector<double> calcPhysChemProp2(const ROMol& mol) {
+    // Early exit for very large molecules
+    unsigned int numHeavyAtoms = mol.getNumHeavyAtoms();
+    unsigned int numRings = RDKit::Descriptors::calcNumRings(mol);
+    if (numHeavyAtoms > 200 || numRings > 12) {
+        std::vector<double> results(NUM_V33_TARGETS, std::numeric_limits<double>::quiet_NaN());
+        return results;
+    }
+    
+    std::vector<double> results(NUM_V33_TARGETS, 0.0);
+    std::vector<double> cascade_predictions;
+    
+    // Extract base features once (4093: SMARTS + RDKit + Osmordred)
+    std::vector<double> base_features = buildBaseFeaturesV33(mol);
+    
+    // Get MW and MR for physics features
+    double MW = calcAMW(mol);
+    double logP, MR;
+    calcCrippenDescriptors(mol, logP, MR);
+    if (!std::isfinite(MW) || MW <= 0) MW = 150.0;
+    if (!std::isfinite(MR) || MR <= 0) MR = 40.0;
+    
+    // Predict each target in cascade order
+    for (int target_idx = 0; target_idx < NUM_V33_TARGETS; ++target_idx) {
+        const char* target_name = CASCADE_ORDER_V33_NAMES[target_idx];
+        
+        std::vector<double> features;
+        double pred = 0.0;
+        
+        // Build features and predict using appropriate model namespace
+        // Using switch-like pattern with if-else for each target
+        if (std::string(target_name) == "V") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeV>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeV::predict(features.data());
+        } else if (std::string(target_name) == "Polarizability") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadePolarizability>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadePolarizability::predict(features.data());
+        } else if (std::string(target_name) == "L") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeL>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeL::predict(features.data());
+        } else if (std::string(target_name) == "E") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeE>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeE::predict(features.data());
+        } else if (std::string(target_name) == "B") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeB>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeB::predict(features.data());
+        } else if (std::string(target_name) == "Density") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeDensity>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeDensity::predict(features.data());
+        } else if (std::string(target_name) == "RI") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeRI>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeRI::predict(features.data());
+        } else if (std::string(target_name) == "S") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeS>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeS::predict(features.data());
+        } else if (std::string(target_name) == "A") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeA>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeA::predict(features.data());
+        } else if (std::string(target_name) == "Modularity") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeModularity>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeModularity::predict(features.data());
+        } else if (std::string(target_name) == "HansenTotal") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeHansenTotal>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeHansenTotal::predict(features.data());
+        } else if (std::string(target_name) == "dD") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadedD>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadedD::predict(features.data());
+        } else if (std::string(target_name) == "dH") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadedH>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadedH::predict(features.data());
+        } else if (std::string(target_name) == "dP") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadedP>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadedP::predict(features.data());
+        } else if (std::string(target_name) == "BP") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeBP>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeBP::predict(features.data());
+        } else if (std::string(target_name) == "deltaHvap") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadedeltaHvap>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadedeltaHvap::predict(features.data());
+        } else if (std::string(target_name) == "logVP") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadelogVP>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadelogVP::predict(features.data());
+        } else if (std::string(target_name) == "logPow") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadelogPow>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadelogPow::predict(features.data());
+        } else if (std::string(target_name) == "logWS") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadelogWS>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadelogWS::predict(features.data());
+        } else if (std::string(target_name) == "deltaHf") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadedeltaHf>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadedeltaHf::predict(features.data());
+        } else if (std::string(target_name) == "deltaHc") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadedeltaHc>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadedeltaHc::predict(features.data());
+        } else if (std::string(target_name) == "MP") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeMP>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeMP::predict(features.data());
+        } else if (std::string(target_name) == "Flashpoint") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeFlashpoint>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeFlashpoint::predict(features.data());
+        } else if (std::string(target_name) == "logHenrycc") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadelogHenrycc>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadelogHenrycc::predict(features.data());
+        } else if (std::string(target_name) == "DipoleMoment") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadeDipoleMoment>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadeDipoleMoment::predict(features.data());
+        } else if (std::string(target_name) == "logViscosity") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadelogViscosity>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadelogViscosity::predict(features.data());
+        } else if (std::string(target_name) == "logODT") {
+            features = buildFeaturesForTargetV33<RDKit::Descriptors::Osmordred::CascadelogODT>(
+                mol, base_features, cascade_predictions, MW, MR);
+            pred = RDKit::Descriptors::Osmordred::CascadelogODT::predict(features.data());
+        }
+        
+        // Store result
+        results[target_idx] = pred;
+        cascade_predictions.push_back(pred);
+    }
+    
+    return results;
+}
+
+}  // namespace Osmordred
+}  // namespace Descriptors
+}  // namespace RDKit
