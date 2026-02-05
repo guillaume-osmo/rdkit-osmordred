@@ -76,6 +76,7 @@ option(RDK_BUILD_MINIMAL_LIB_SUBSTRUCTLIBRARY "build support for SubstructLibrar
 option(RDK_BUILD_MINIMAL_LIB_MCS "build support for MCS into MinimalLib" OFF )
 option(RDK_BUILD_MINIMAL_LIB_MOLZIP "build support for molzip into MinimalLib" OFF )
 option(RDK_BUILD_LONG_RUNNING_TESTS "build longer running tests" OFF )
+option(RDK_BUILD_OSMORDRED_SUPPORT "Build Osmordred descriptors (requires LAPACK)" ON )
 
 set(RDK_BOOST_VERSION "1.81.0")
 
@@ -256,6 +257,10 @@ endif()
 
 if(RDK_BUILD_YAEHMOP_SUPPORT)
     add_definitions(-DRDK_BUILD_YAEHMOP_SUPPORT)
+endif()
+
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+    add_definitions(-DRDK_BUILD_OSMORDRED_SUPPORT)
 endif()
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 4)
