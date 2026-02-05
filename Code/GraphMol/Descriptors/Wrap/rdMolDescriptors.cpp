@@ -2018,6 +2018,39 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
         "Calculate 291 Abraham SMARTS-based features for molecular property prediction.\n"
         "Returns: vector of 291 double values (241 base SMARTS + 50 golden ratio features)\n");
     
+    // SMARTS291: Batch version with parallel processing
+    python::def("CalcAbrahamFeaturesBatch",
+        +[](const std::vector<std::string>& smiles_list, int n_jobs) {
+            return RDKit::Descriptors::Osmordred::calcAbrahamFeaturesBatch(smiles_list, n_jobs);
+        },
+        (python::arg("smiles_list"), python::arg("n_jobs")=0),
+        "BATCH: Compute 291 Abraham features for multiple molecules in parallel.\n"
+        "Returns vector of 291-element vectors (one per molecule). NaN for invalid molecules.\n");
+    
+    // SMARTS291: Batch from mol objects (preserves tautomer canonical)
+    python::def("CalcAbrahamFeaturesBatchFromMols",
+        +[](const python::list& mol_list, int n_jobs) {
+            std::vector<const RDKit::ROMol*> mols;
+            mols.reserve(python::len(mol_list));
+            for (int i = 0; i < python::len(mol_list); ++i) {
+                python::object obj = mol_list[i];
+                if (obj.is_none()) {
+                    mols.push_back(nullptr);
+                    continue;
+                }
+                try {
+                    const RDKit::ROMol& mol = python::extract<const RDKit::ROMol&>(obj);
+                    mols.push_back(&mol);
+                } catch (...) {
+                    mols.push_back(nullptr);
+                }
+            }
+            return RDKit::Descriptors::Osmordred::calcAbrahamFeaturesBatchFromMols(mols, n_jobs);
+        },
+        (python::arg("mols"), python::arg("n_jobs")=0),
+        "BATCH: Compute 291 Abraham features from mol objects.\n"
+        "Accepts list of RDKit Mol objects (can contain None). Returns NaN for invalid.\n");
+    
     // RDKit217: Standard RDKit descriptors from C++
     auto rdkit217_from_mols_impl = +[](python::list mols_py, int n_jobs) {
         std::vector<const RDKit::ROMol*> mols;
@@ -2042,6 +2075,16 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
         "Extract 217 RDKit descriptors from mol objects in parallel.\n"
         "Input: list of RDKit Mol objects (can contain None)\n"
         "Output: list of descriptor vectors (217 features per molecule)\n");
+    
+    // RDKit217: SMILES-based batch version
+    python::def("ExtractRDKitDescriptorsBatch",
+        +[](const std::vector<std::string>& smiles_list, int n_jobs) {
+            return RDKit::Descriptors::Osmordred::extractRDKitDescriptorsBatch(smiles_list, n_jobs);
+        },
+        (python::arg("smiles_list"), python::arg("n_jobs")=0),
+        "BATCH: Extract 217 RDKit descriptors from SMILES strings in parallel.\n"
+        "Input: list of SMILES strings\n"
+        "Output: list of descriptor vectors (217 features per molecule). NaN for invalid.\n");
     
     python::def("GetRDKit217DescriptorNames", RDKit::Descriptors::Osmordred::getRDKit217DescriptorNames,
         "Get the 217 RDKit descriptor names in exact order matching Python's Descriptors._descList.\n");

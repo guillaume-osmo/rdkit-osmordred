@@ -8,10 +8,15 @@
 
 #include "abraham_queries.h"
 #include <GraphMol/RWMol.h>
+#include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
 #include <vector>
 #include <string>
 #include <stdexcept>
+#include <future>
+#include <thread>
+#include <cmath>
+#include <limits>
 
 #ifdef HAVE_ABRAHAM_MODELS
 #include "AbrahamGBAABRAHAM.h"
@@ -288,6 +293,116 @@ std::vector<double> calcAbrahamsFeatures(const RDKit::ROMol& mol) {
     allFeatures.insert(allFeatures.end(), goldenA.begin(), goldenA.end());
     
     return allFeatures;
+}
+
+// Batch version with parallel processing
+std::vector<std::vector<double>> calcAbrahamFeaturesBatch(
+    const std::vector<std::string>& smiles_list, int n_jobs) {
+    
+    std::vector<std::vector<double>> results;
+    results.reserve(smiles_list.size());
+    
+    const size_t nFeatures = 291;
+    const std::vector<double> nanRow(nFeatures, std::numeric_limits<double>::quiet_NaN());
+    
+    // Determine number of threads
+    unsigned int nThreads = n_jobs > 0 ? static_cast<unsigned int>(n_jobs) 
+                                       : std::thread::hardware_concurrency();
+    if (nThreads == 0) nThreads = 1;
+    
+    if (nThreads <= 1 || smiles_list.size() < 10) {
+        // Sequential processing
+        for (const auto& smi : smiles_list) {
+            try {
+                ROMol* mol = SmilesToMol(smi);
+                if (mol) {
+                    auto features = calcAbrahamsFeatures(*mol);
+                    delete mol;
+                    results.push_back(features);
+                } else {
+                    results.push_back(nanRow);
+                }
+            } catch (...) {
+                results.push_back(nanRow);
+            }
+        }
+    } else {
+        // Parallel processing
+        std::vector<std::future<std::vector<double>>> futures;
+        futures.reserve(smiles_list.size());
+        
+        for (const auto& smi : smiles_list) {
+            futures.emplace_back(std::async(std::launch::async, [&smi, &nanRow]() {
+                try {
+                    ROMol* mol = SmilesToMol(smi);
+                    if (mol) {
+                        auto features = calcAbrahamsFeatures(*mol);
+                        delete mol;
+                        return features;
+                    }
+                } catch (...) {}
+                return nanRow;
+            }));
+        }
+        
+        for (auto& f : futures) {
+            results.push_back(f.get());
+        }
+    }
+    
+    return results;
+}
+
+// Batch version from mol objects (preserves tautomer canonical)
+std::vector<std::vector<double>> calcAbrahamFeaturesBatchFromMols(
+    const std::vector<const ROMol*>& mols, int n_jobs) {
+    
+    std::vector<std::vector<double>> results;
+    results.reserve(mols.size());
+    
+    const size_t nFeatures = 291;
+    const std::vector<double> nanRow(nFeatures, std::numeric_limits<double>::quiet_NaN());
+    
+    // Determine number of threads
+    unsigned int nThreads = n_jobs > 0 ? static_cast<unsigned int>(n_jobs)
+                                       : std::thread::hardware_concurrency();
+    if (nThreads == 0) nThreads = 1;
+    
+    if (nThreads <= 1 || mols.size() < 10) {
+        // Sequential processing
+        for (const ROMol* mol : mols) {
+            if (mol) {
+                try {
+                    results.push_back(calcAbrahamsFeatures(*mol));
+                } catch (...) {
+                    results.push_back(nanRow);
+                }
+            } else {
+                results.push_back(nanRow);
+            }
+        }
+    } else {
+        // Parallel processing
+        std::vector<std::future<std::vector<double>>> futures;
+        futures.reserve(mols.size());
+        
+        for (const ROMol* mol : mols) {
+            futures.emplace_back(std::async(std::launch::async, [mol, &nanRow]() {
+                if (mol) {
+                    try {
+                        return calcAbrahamsFeatures(*mol);
+                    } catch (...) {}
+                }
+                return nanRow;
+            }));
+        }
+        
+        for (auto& f : futures) {
+            results.push_back(f.get());
+        }
+    }
+    
+    return results;
 }
 
 } // namespace Osmordred

@@ -76,6 +76,13 @@ RDKIT_DESCRIPTORS_EXPORT std::vector<double> generateGoldenFeaturesRidge(const s
 // Calculate 291 Abraham features (241 base + 50 golden for A model)
 RDKIT_DESCRIPTORS_EXPORT std::vector<double> calcAbrahamsFeatures(const RDKit::ROMol& mol);
 
+// Batch versions with parallel processing
+RDKIT_DESCRIPTORS_EXPORT std::vector<std::vector<double>> calcAbrahamFeaturesBatch(
+    const std::vector<std::string>& smiles_list, int n_jobs = 0);
+
+RDKIT_DESCRIPTORS_EXPORT std::vector<std::vector<double>> calcAbrahamFeaturesBatchFromMols(
+    const std::vector<const RDKit::ROMol*>& mols, int n_jobs = 0);
+
 #ifdef HAVE_ABRAHAM_MODELS
 // Full Abraham parameter prediction (requires trained models)
 RDKIT_DESCRIPTORS_EXPORT std::vector<double> calcAbrahams(const RDKit::ROMol& mol);
