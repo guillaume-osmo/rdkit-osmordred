@@ -1,5 +1,5 @@
 //
-//  Copyright (C) 2007-2025 Greg Landrum and other RDKit contributors
+//  Copyright (C) 2007-2017 Greg Landrum
 //
 //   @@ All Rights Reserved @@
 //  This file is part of the RDKit.
@@ -18,6 +18,7 @@
 #include <RDGeneral/RDLog.h>
 
 #include <GraphMol/Descriptors/MolDescriptors.h>
+#include <GraphMol/Descriptors/Osmordred.h>
 #include <GraphMol/Descriptors/AtomFeat.h>
 #include <GraphMol/Descriptors/OxidationNumbers.h>
 #include <GraphMol/Fingerprints/AtomPairs.h>
@@ -68,9 +69,9 @@ python::list computeCrippenContribs(
     python::list atomTypeLabels = python::list()) {
   std::vector<unsigned int> *tAtomTypes = nullptr;
   std::vector<std::string> *tAtomTypeLabels = nullptr;
-  unsigned int numAtomTypes = python::len(atomTypes);
-  if (numAtomTypes != 0) {
-    if (numAtomTypes != mol.getNumAtoms()) {
+  if (python::extract<unsigned int>(atomTypes.attr("__len__")()) != 0) {
+    if (python::extract<unsigned int>(atomTypes.attr("__len__")()) !=
+        mol.getNumAtoms()) {
       throw_value_error(
           "if atomTypes vector is provided, it must be as long as the number "
           "of atoms");
@@ -78,9 +79,9 @@ python::list computeCrippenContribs(
       tAtomTypes = new std::vector<unsigned int>(mol.getNumAtoms(), 0);
     }
   }
-  unsigned int numAtomTypeLabels = python::len(atomTypeLabels);
-  if (numAtomTypeLabels != 0) {
-    if (numAtomTypeLabels != mol.getNumAtoms()) {
+  if (python::extract<unsigned int>(atomTypeLabels.attr("__len__")()) != 0) {
+    if (python::extract<unsigned int>(atomTypeLabels.attr("__len__")()) !=
+        mol.getNumAtoms()) {
       throw_value_error(
           "if atomTypeLabels vector is provided, it must be as long as the "
           "number of atoms");
@@ -336,7 +337,8 @@ double kappaHelper(double (*fn)(const RDKit::ROMol &, std::vector<double> *),
     // make sure the optional argument actually was a list
     python::list typecheck = python::extract<python::list>(atomContribs);
 
-    if (python::len(typecheck) != mol.getNumAtoms()) {
+    if (python::extract<unsigned int>(typecheck.attr("__len__")()) !=
+        mol.getNumAtoms()) {
       throw_value_error("length of atomContribs list != number of atoms");
     }
 
@@ -366,7 +368,8 @@ MorganFingerprintHelper(const RDKit::ROMol &mol, unsigned int radius, int nBits,
   RDLog::deprecationWarning("please use MorganGenerator");
   std::vector<boost::uint32_t> *invars = nullptr;
   if (invariants) {
-    unsigned int nInvar = python::len(invariants);
+    unsigned int nInvar =
+        python::extract<unsigned int>(invariants.attr("__len__")());
     if (nInvar) {
       if (nInvar != mol.getNumAtoms()) {
         throw_value_error("length of invariant vector != number of atoms");
@@ -382,7 +385,8 @@ MorganFingerprintHelper(const RDKit::ROMol &mol, unsigned int radius, int nBits,
   }
   std::vector<std::uint32_t> *froms = nullptr;
   if (fromAtoms) {
-    unsigned int nFrom = python::len(fromAtoms);
+    unsigned int nFrom =
+        python::extract<unsigned int>(fromAtoms.attr("__len__")());
     if (nFrom) {
       froms = new std::vector<std::uint32_t>();
       for (unsigned int i = 0; i < nFrom; ++i) {
@@ -507,7 +511,8 @@ GetMorganFingerprintBV(const RDKit::ROMol &mol, unsigned int radius,
   RDLog::deprecationWarning("please use MorganGenerator");
   std::vector<boost::uint32_t> *invars = nullptr;
   if (invariants) {
-    unsigned int nInvar = python::len(invariants);
+    unsigned int nInvar =
+        python::extract<unsigned int>(invariants.attr("__len__")());
     if (nInvar) {
       if (nInvar != mol.getNumAtoms()) {
         throw_value_error("length of invariant vector != number of atoms");
@@ -602,7 +607,8 @@ python::list GetUSR(const RDKit::ROMol &mol, int confId) {
 }
 
 python::list GetUSRDistributions(python::object coords, python::object points) {
-  unsigned int numCoords = python::len(coords);
+  unsigned int numCoords =
+      python::extract<unsigned int>(coords.attr("__len__")());
   if (numCoords == 0) {
     throw_value_error("no coordinates");
   }
@@ -639,8 +645,9 @@ python::list GetUSRDistributions(python::object coords, python::object points) {
 
 python::list GetUSRDistributionsFromPoints(python::object coords,
                                            python::object points) {
-  unsigned int numCoords = python::len(coords);
-  unsigned int numPts = python::len(points);
+  unsigned int numCoords =
+      python::extract<unsigned int>(coords.attr("__len__")());
+  unsigned int numPts = python::extract<unsigned int>(points.attr("__len__")());
   if (numCoords == 0) {
     throw_value_error("no coordinates");
   }
@@ -670,13 +677,15 @@ python::list GetUSRDistributionsFromPoints(python::object coords,
 }
 
 python::list GetUSRFromDistributions(python::object distances) {
-  unsigned int numDist = python::len(distances);
+  unsigned int numDist =
+      python::extract<unsigned int>(distances.attr("__len__")());
   if (numDist == 0) {
     throw_value_error("no distances");
   }
   std::vector<std::vector<double>> dist(numDist);
   for (unsigned int i = 0; i < numDist; ++i) {
-    unsigned int numPts = python::len(distances[i]);
+    unsigned int numPts =
+        python::extract<unsigned int>(distances[i].attr("__len__")());
     if (numPts == 0) {
       throw_value_error("distances missing");
     }
@@ -697,12 +706,15 @@ python::list GetUSRFromDistributions(python::object distances) {
 
 double GetUSRScore(python::object descriptor1, python::object descriptor2,
                    python::object weights) {
-  unsigned int numElements = python::len(descriptor1);
-  if (numElements != python::len(descriptor2)) {
+  unsigned int numElements =
+      python::extract<unsigned int>(descriptor1.attr("__len__")());
+  if (numElements !=
+      python::extract<unsigned int>(descriptor2.attr("__len__")())) {
     throw_value_error("descriptors must have the same length");
   }
   unsigned int numWeights = numElements / 12;
-  unsigned int numPyWeights = python::len(weights);
+  unsigned int numPyWeights =
+      python::extract<unsigned int>(weights.attr("__len__")());
   std::vector<double> w(numWeights, 1.0);  // default weights: all to 1.0
   if ((numPyWeights > 0) && (numPyWeights != numWeights)) {
     throw_value_error("number of weights is not correct");
@@ -736,13 +748,15 @@ python::list GetUSRCAT(const RDKit::ROMol &mol, python::object atomSelections,
   if (atomSelections != python::object()) {
     // make sure the optional argument actually was a list
     python::list typecheck = python::extract<python::list>(atomSelections);
-    unsigned int numSel = python::len(atomSelections);
+    unsigned int numSel =
+        python::extract<unsigned int>(atomSelections.attr("__len__")());
     if (numSel == 0) {
       throw_value_error("empty atom selections");
     }
     atomIds.resize(numSel);
     for (unsigned int i = 0; i < numSel; ++i) {
-      unsigned int numPts = python::len(atomSelections[i]);
+      unsigned int numPts =
+          python::extract<unsigned int>(atomSelections[i].attr("__len__")());
       std::vector<unsigned int> tmpIds(numPts);
       for (unsigned int j = 0; j < numPts; ++j) {
         tmpIds[j] = python::extract<unsigned int>(atomSelections[i][j]) - 1;
@@ -764,7 +778,7 @@ python::list CalcSlogPVSA(const RDKit::ROMol &mol, python::object bins,
                           bool force) {
   std::vector<double> *lbins = nullptr;
   if (bins) {
-    unsigned int nBins = python::len(bins);
+    unsigned int nBins = python::extract<unsigned int>(bins.attr("__len__")());
     if (nBins) {
       lbins = new std::vector<double>(nBins, 0.0);
       for (unsigned int i = 0; i < nBins; ++i) {
@@ -785,7 +799,7 @@ python::list CalcSMRVSA(const RDKit::ROMol &mol, python::object bins,
                         bool force) {
   std::vector<double> *lbins = nullptr;
   if (bins) {
-    unsigned int nBins = python::len(bins);
+    unsigned int nBins = python::extract<unsigned int>(bins.attr("__len__")());
     if (nBins) {
       lbins = new std::vector<double>(nBins, 0.0);
       for (unsigned int i = 0; i < nBins; ++i) {
@@ -806,7 +820,7 @@ python::list CalcPEOEVSA(const RDKit::ROMol &mol, python::object bins,
                          bool force) {
   std::vector<double> *lbins = nullptr;
   if (bins) {
-    unsigned int nBins = python::len(bins);
+    unsigned int nBins = python::extract<unsigned int>(bins.attr("__len__")());
     if (nBins) {
       lbins = new std::vector<double>(nBins, 0.0);
       for (unsigned int i = 0; i < nBins; ++i) {
@@ -826,7 +840,7 @@ python::list CalcPEOEVSA(const RDKit::ROMol &mol, python::object bins,
 python::list CalcCustomPropVSA(const RDKit::ROMol &mol,
                                const std::string customPropName,
                                python::object bins, bool force) {
-  unsigned int nBins = python::len(bins);
+  unsigned int nBins = python::extract<unsigned int>(bins.attr("__len__")());
   std::vector<double> lbins = std::vector<double>(nBins, 0.0);
   for (unsigned int i = 0; i < nBins; ++i) {
     lbins[i] = python::extract<double>(bins[i]);
@@ -904,60 +918,6 @@ int registerPropertyHelper(python::object o) {
   return RDKit::Descriptors::Properties::registerProperty(ptr());
 }
 
-boost::shared_ptr<RDKit::Descriptors::DoubleCubicLatticeVolume>
-getDoubleCubicLatticeVolume(const RDKit::ROMol &mol, const python::list &radii,
-                            bool isProtein = false, bool includeLigand = true,
-                            double probeRadius = 1.4, int confId = -1) {
-  std::vector<double> radiiAsVector;
-  radiiAsVector.reserve(mol.getNumAtoms());
-  pythonObjectToVect<double>(radii, radiiAsVector);
-
-  return boost::make_shared<RDKit::Descriptors::DoubleCubicLatticeVolume>(
-      mol, std::move(radiiAsVector), isProtein, includeLigand, probeRadius,
-      confId);
-}
-
-double getPartialSurfaceAreaHelper(
-    RDKit::Descriptors::DoubleCubicLatticeVolume &self,
-    const python::object &atomIdxs) {
-  unsigned int numAtoms = self.mol.getNumAtoms();
-  auto atoms = pythonObjectToDynBitset(atomIdxs, numAtoms);
-
-  if (atoms.empty()) {
-    throw_value_error("No atom indices supplied for Partial Surface Area");
-  }
-
-  return self.getPartialSurfaceArea(atoms);
-}
-
-double getPartialVolumeHelper(
-    RDKit::Descriptors::DoubleCubicLatticeVolume &self,
-    const python::object &atomIdxs) {
-  unsigned int numAtoms = self.mol.getNumAtoms();
-  auto atoms = pythonObjectToDynBitset(atomIdxs, numAtoms);
-  if (atoms.empty()) {
-    throw_value_error("No atom indices supplied for Partial Surface Area");
-  }
-
-  return self.getPartialVolume(atoms);
-}
-
-python::dict getSurfacePointsHelper(
-    RDKit::Descriptors::DoubleCubicLatticeVolume &self) {
-  const std::map<unsigned int, std::vector<RDGeom::Point3D>> &points =
-      self.getSurfacePoints();
-  python::dict surfacePoints;
-
-  for (const auto &it : points) {
-    python::list points3D;
-    for (const auto &p : it.second) {
-      points3D.append(p);
-    }
-    surfacePoints[it.first] = points3D;
-  }
-  return surfacePoints;
-}
-
 }  // namespace
 
 BOOST_PYTHON_MODULE(rdMolDescriptors) {
@@ -976,8 +936,7 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
       .setattr("atomTypes", atomPairTypes)
       .setattr("numPathBits", RDKit::AtomPairs::numPathBits)
       .setattr("numAtomPairFingerprintBits",
-               RDKit::AtomPairs::numAtomPairFingerprintBits)
-      .def("__setattr__", &safeSetattr);
+               RDKit::AtomPairs::numAtomPairFingerprintBits);
   docString = "Returns the atom code (hash) for an atom";
   python::def("GetAtomPairAtomCode", RDKit::AtomPairs::getAtomCode,
               (python::arg("atom"), python::arg("branchSubtract") = 0,
@@ -1701,68 +1660,31 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
   docString =
       R"DOC(ARGUMENTS:
       "   - mol: molecule or protein under consideration
-      "   - radii: radii for atoms of input mol (get using GetPeriodicTable or provide custom list)
       "   - isProtein: flag to indicate if the input is a protein (default=False, free ligand).
       "   - includeLigand: flag to include or exclude a bound ligand when input is a protein (default=True)
       "   - probeRadius: radius of the solvent probe (default=1.2)
-      "   - confId: conformer ID to consider (default=-1)
+      "   - depth: control of number of dots per atom (default=4)
+      "   - dotDensity: control of accuracy (default=0)
       ")DOC";
-
-  python::class_<
-      RDKit::Descriptors::DoubleCubicLatticeVolume,
-      boost::shared_ptr<RDKit::Descriptors::DoubleCubicLatticeVolume>>(
+  python::class_<RDKit::Descriptors::DoubleCubicLatticeVolume>(
       "DoubleCubicLatticeVolume",
       "Class for the Double Cubic Lattice Volume method",
-      python::init<const RDKit::ROMol &, bool, bool, double, int>(
-          (python::arg("mol"), python::arg("isProtein") = false,
-           python::arg("includeLigand") = true,
-           python::arg("probeRadius") = 1.4, python::arg("confId") = -1)))
-      .def("__init__",
-           python::make_constructor(
-               &getDoubleCubicLatticeVolume, python::default_call_policies(),
-               (python::arg("mol"), python::arg("radii"),
-                python::arg("isProtein") = false,
-                python::arg("includeLigand") = true,
-                python::arg("probeRadius") = 1.4, python::arg("confId") = -1)),
-           docString.c_str())
+      python::init<const RDKit::ROMol &,
+                   python::optional<bool, bool, double, int, int>>(
+          (python::args("self", "mol"), python::args("isProtein") = false,
+           python::args("includeLigand") = true,
+           python::args("probeRadius") = 1.2, python::args("depth") = 4,
+           python::args("dotDensity") = 0),
+          docString.c_str()))
       .def("GetSurfaceArea",
            &RDKit::Descriptors::DoubleCubicLatticeVolume::getSurfaceArea,
-           (python::args("self")),
            "Get the Surface Area of the Molecule or Protein")
-      .def("GetAtomSurfaceArea",
-           &RDKit::Descriptors::DoubleCubicLatticeVolume::getAtomSurfaceArea,
-           (python::arg("atom_idx")),
-           "Get the surface area of atom with atom_idx")
-      .def("GetPolarSurfaceArea",
-           &RDKit::Descriptors::DoubleCubicLatticeVolume::getPolarSurfaceArea,
-           (python::arg("includeSandP") = false,
-            python::arg("includeHs") = false),
-           "Get the Polar Surface Area of the Molecule or Protein")
-      .def(
-          "GetPartialSurfaceArea", &getPartialSurfaceAreaHelper,
-          (python::arg("atomIndices")),
-          "Get the Partial Surface Area of the Molecule or Protein for specified subset of atoms")
-      .def("GetSurfacePoints", &getSurfacePointsHelper,
-           "Get the set of points representing the surface")
       .def("GetVolume",
            &RDKit::Descriptors::DoubleCubicLatticeVolume::getVolume,
            "Get the Total Volume of the Molecule or Protein")
       .def("GetVDWVolume",
            &RDKit::Descriptors::DoubleCubicLatticeVolume::getVDWVolume,
            "Get the van der Waals Volume of the Molecule or Protein")
-      .def(
-          "GetAtomVolume",
-          &RDKit::Descriptors::DoubleCubicLatticeVolume::getAtomVolume,
-          (python::arg("atomIdx"), python::arg("solventRadius")),
-          "Get the volume atom of atom_idx with volume for specified Probe Radius")
-      .def("GetPolarVolume",
-           &RDKit::Descriptors::DoubleCubicLatticeVolume::getPolarVolume,
-           (python::arg("includeSandP") = false,
-            python::arg("includeHs") = false),
-           "Get the Polar Volume of the Molecule or Protein")
-      .def(
-          "GetPartialVolume", &getPartialVolumeHelper, python::arg("atomIdx"),
-          "Get the Partial Volume of the Molecule or Protein for specified subset of atoms")
       .def("GetCompactness",
            &RDKit::Descriptors::DoubleCubicLatticeVolume::getCompactness,
            "Get the Compactness of the Protein")
@@ -1966,5 +1888,255 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
       "  This is experimental code, still under development.";
   python::def("CalcOxidationNumbers", RDKit::Descriptors::calcOxidationNumbers,
               (python::arg("mol")), docString.c_str());
-#endif
+#endif // eigen3
+  
+  // Osmordred descriptors
+#ifdef RDK_BUILD_OSMORDRED_SUPPORT
+      python::def("CalcABCIndex", RDKit::Descriptors::Osmordred::calcABCIndex,
+        "CalcABCIndex function\n");
+    python::def("CalcAcidBase", RDKit::Descriptors::Osmordred::calcAcidBase,
+        "CalcAcidBase function\n");
+    python::def("CalcAromatic", RDKit::Descriptors::Osmordred::calcAromatic,
+        "CalcAromatic function\n");
+    python::def("CalcAtomCount", RDKit::Descriptors::Osmordred::calcAtomCounts,
+        "CalcAtomCounts function\n");
+    python::def("CalcBalabanJ", RDKit::Descriptors::Osmordred::calcBalabanJ,
+        "CalcBalabanJ function\n");
+    python::def("CalcBertzCT", RDKit::Descriptors::Osmordred::calcBertzCT,
+        "CalcBertzCT function\n");
+    python::def("CalcBondCount", RDKit::Descriptors::Osmordred::calcBondCounts,
+        "CalcBondCounts function\n");
+    python::def("CalcVertexAdjacencyInformation", RDKit::Descriptors::Osmordred::calcVertexAdjacencyInformation,
+        "CalcVertexAdjacencyInformation function\n");
+    python::def("CalcWeight", RDKit::Descriptors::Osmordred::calcWeight,
+        "CalcWeight function\n");
+    python::def("CalcWienerIndex", RDKit::Descriptors::Osmordred::calcWienerIndex,
+        "CalcWienerIndex function\n");
+    python::def("CalcVdwVolumeABC", RDKit::Descriptors::Osmordred::calcVdwVolumeABC,
+        "CalcVdwVolumeABC function\n");
+    python::def("CalcTopoPSA", RDKit::Descriptors::Osmordred::calcTopoPSA,
+        "CalcTopoPSA function\n");
+    python::def("CalcSLogP", RDKit::Descriptors::Osmordred::calcSLogP,
+        "CalcSLogP function\n");
+    python::def("CalcHydrogenBond", RDKit::Descriptors::Osmordred::calcHydrogenBond,
+        "CalcHydrogenBond function\n");
+    python::def("CalcLogS", RDKit::Descriptors::Osmordred::calcLogS,
+        "CalcLogS function\n");
+    python::def("CalcLipinski", RDKit::Descriptors::Osmordred::calcLipinskiGhose,
+        "CalcLipinskiGhose function\n");
+    python::def("CalcMcGowanVolume", RDKit::Descriptors::Osmordred::calcMcGowanVolume,
+        "CalcMcGowanVolume function\n");
+    python::def("CalcPolarizability", RDKit::Descriptors::Osmordred::calcPolarizability,
+        "CalcPolarizability function\n");
+    python::def("CalcRotatableBond", RDKit::Descriptors::Osmordred::calcRotatableBond,
+        "CalcRotatableBond function\n");
+    python::def("CalcFragmentComplexity", RDKit::Descriptors::Osmordred::calcFragmentComplexity,
+        "CalcFragmentComplexity function\n");
+    python::def("CalcConstitutional", RDKit::Descriptors::Osmordred::calcConstitutional,
+        "CalcConstitutional function\n");
+    python::def("CalcTopologicalIndex", RDKit::Descriptors::Osmordred::calcTopologicalIndex,
+        "CalcTopologicalIndex function\n");
+    python::def("CalcDetourMatrixEigen", RDKit::Descriptors::Osmordred::calcDetourMatrixDescs,
+        "CalcDetourMatrixDescs function\n");
+    python::def("CalcDetourMatrix", RDKit::Descriptors::Osmordred::calcDetourMatrixDescsL,
+        "CalcDetourMatrixDescsL function\n");
+    python::def("CalcDistanceMatrixEigen", RDKit::Descriptors::Osmordred::calcDistMatrixDescs,
+        "CalcDistMatrixDescs function\n");
+    python::def("CalcDistanceMatrix", RDKit::Descriptors::Osmordred::calcDistMatrixDescsL,
+        "CalcDistMatrixDescsL function\n");
+    python::def("CalcAdjacencyMatrixEigen", RDKit::Descriptors::Osmordred::calcAdjMatrixDescs,
+        "CalcAdjMatrixDescs function\n");
+    python::def("CalcAdjacencyMatrix", RDKit::Descriptors::Osmordred::calcAdjMatrixDescsL,
+        "CalcAdjMatrixDescsL function\n");
+    python::def("CalcCarbonTypes", RDKit::Descriptors::Osmordred::calcCarbonTypes,
+        "CalcCarbonTypes function\n");
+    python::def("CalcEccentricConnectivityIndex", RDKit::Descriptors::Osmordred::calcEccentricConnectivityIndex,
+        "CalcEccentricConnectivityIndex function\n");
+    python::def("CalcBaryszMatrix", RDKit::Descriptors::Osmordred::calcBaryszMatrixDescsL,
+        "CalcBaryszMatrixDescsL function\n");
+    python::def("CalcBaryszMatrixEigen", RDKit::Descriptors::Osmordred::calcBaryszMatrixDescs,
+        "CalcBaryszMatrixDescs function\n");
+    python::def("CalcZagrebIndex", RDKit::Descriptors::Osmordred::calcZagrebIndex,
+        "CalcZagrebIndex function\n");
+    python::def("CalcMoeType", RDKit::Descriptors::Osmordred::calcMoeType,
+        "CalcMoeType function\n");
+    python::def("CalcMolecularDistanceEdge", RDKit::Descriptors::Osmordred::calcMolecularDistanceEdgeDescs,
+        "CalcMolecularDistanceEdgeDescs function\n");
+    python::def("CalcEState", RDKit::Descriptors::Osmordred::calcEStateDescs,
+        "CalcEStateDescs function\n");
+    python::def("CalcWalkCount", RDKit::Descriptors::Osmordred::calcWalkCounts,
+        "CalcWalkCounts function\n");
+    python::def("CalcTopologicalCharge", RDKit::Descriptors::Osmordred::calcTopologicalChargeDescs,
+        "CalcTopologicalChargeDescs function\n");
+    python::def("CalcChi", RDKit::Descriptors::Osmordred::calcAllChiDescriptors,
+        "CalcAllChiDescriptors function\n");
+    python::def("CalcPathCount", RDKit::Descriptors::Osmordred::calcPathCount,
+        "CalcPathCount function\n");
+    python::def("CalcKappaShapeIndex", RDKit::Descriptors::Osmordred::calcKappaShapeIndex,
+        "CalcKappaShapeIndex function\n");
+    python::def("CalcRingCount", RDKit::Descriptors::Osmordred::calcRingCount,
+        "CalcRingCount function\n");
+    python::def("CalcMolecularId", RDKit::Descriptors::Osmordred::calcMolecularId,
+        "CalcMolecularId function\n");
+    python::def("CalcBCUT", RDKit::Descriptors::Osmordred::calcBCUTs,
+        "CalcBCUTs function\n");
+    python::def("CalcAutocorrelation", RDKit::Descriptors::Osmordred::calcAutoCorrelation,
+        "CalcAutoCorrelation function\n");
+    python::def("CalcFramework", RDKit::Descriptors::Osmordred::calcFramework,
+        "CalcFramework function\n");
+    python::def("CalcExtendedTopochemicalAtom", RDKit::Descriptors::Osmordred::calcExtendedTopochemicalAtom,
+        "CalcExtendedTopochemicalAtom function\n");
+    python::def("CalcExtendedTopochemicalAtom2", RDKit::Descriptors::Osmordred::calculateETADescriptors,
+        "CalculateETADescriptors function\n");
+    python::def("CalcChipath", RDKit::Descriptors::Osmordred::calcChipath,
+        "CalcChipath function\n");
+    python::def("CalcChichain", RDKit::Descriptors::Osmordred::calcChichain,
+        "CalcChichain function\n");
+    python::def("CalcChicluster", RDKit::Descriptors::Osmordred::calcChicluster,
+        "CalcChicluster function\n");
+    python::def("CalcChipathcluster", RDKit::Descriptors::Osmordred::calcChipathcluster,
+        "CalcChipathcluster function\n");
+    python::def("CalcAcidicGroupCount", RDKit::Descriptors::Osmordred::calcAcidicGroupCount,
+        "CalcAcidicGroupCount function\n");
+    python::def("CalcBasicGroupCount", RDKit::Descriptors::Osmordred::calcBasicGroupCount,
+        "CalcBasicGroupCount function\n");
+    python::def("CalcCountAromaticAtoms", RDKit::Descriptors::Osmordred::countAromaticAtoms,
+        "CalcCountAromaticAtoms function");
+    python::def("CalcCountAromaticBonds", RDKit::Descriptors::Osmordred::countAromaticBonds,
+        "CalcCountAromaticBonds function");
+    python::def("CalcBEState", RDKit::Descriptors::Osmordred::calcBEStateDescs,
+        "CalcBEStateDescs function\n");
+    python::def("CalcHEState", RDKit::Descriptors::Osmordred::calcHEStateDescs,
+        "CalcHEStateDescs function\n");
+    python::def("CalcAlphaKappaShapeIndex", RDKit::Descriptors::Osmordred::calcAlphaKappaShapeIndex,
+        "CalcAlphaKappaShapeIndex function\n");
+    python::def("CalcAbrahams", RDKit::Descriptors::Osmordred::calcAbrahams,
+        "CalcAbrahams function\n");
+    python::def("CalcPol", RDKit::Descriptors::Osmordred::calcPol,
+        "CalcPol function\n");
+    python::def("CalcMR", RDKit::Descriptors::Osmordred::calcMR,
+        "CalcMR function\n");
+    python::def("CalcFlexibility", RDKit::Descriptors::Osmordred::calcFlexibility,
+        "CalcFlexibility function\n");
+    python::def("CalcODT", RDKit::Descriptors::Osmordred::calcODT,
+        "CalcODT function\n");
+    python::def("CalcSchultz", RDKit::Descriptors::Osmordred::calcSchultz,
+        "CalcSchultz function\n");
+    python::def("CalcRNCGRPCG", RDKit::Descriptors::Osmordred::calcRNCG_RPCG,
+        "CalcRNCG_RPCG function\n");
+    python::def("CalcAZV", RDKit::Descriptors::Osmordred::calcAZV,
+        "CalcAZV function\n");
+    python::def("CalcASV", RDKit::Descriptors::Osmordred::calcASV,
+        "CalcASV function\n");
+    python::def("CalcDSV", RDKit::Descriptors::Osmordred::calcDSV,
+        "CalcDSV function\n");
+    python::def("CalcAZS", RDKit::Descriptors::Osmordred::calcAZS,
+        "CalcAZS function\n");
+    python::def("CalcASZ", RDKit::Descriptors::Osmordred::calcASZ,
+        "CalcASZ function\n");
+    python::def("CalcDN2S", RDKit::Descriptors::Osmordred::calcDN2S,
+        "CalcDN2S function\n");
+    python::def("CalcDN2I", RDKit::Descriptors::Osmordred::calcDN2I,
+        "CalcDN2I function\n");
+    python::def("CalcASI", RDKit::Descriptors::Osmordred::calcASI,
+        "CalcASI function\n");
+    python::def("CalcDSI", RDKit::Descriptors::Osmordred::calcDSI,
+        "CalcDSI function\n");
+    python::def("CalcASN", RDKit::Descriptors::Osmordred::calcASN,
+        "CalcASN function\n");
+    python::def("CalcDSN", RDKit::Descriptors::Osmordred::calcDSN,
+        "CalcDSN function\n");
+    python::def("CalcDN2N", RDKit::Descriptors::Osmordred::calcDN2N,
+        "CalcDN2N function\n");
+    python::def("CalcANS", RDKit::Descriptors::Osmordred::calcANS,
+        "CalcANS function\n");
+    python::def("CalcANV", RDKit::Descriptors::Osmordred::calcANV,
+        "CalcANV function\n");
+    python::def("CalcAZN", RDKit::Descriptors::Osmordred::calcAZN,
+        "CalcAZN function\n");
+    python::def("CalcANZ", RDKit::Descriptors::Osmordred::calcANZ,
+        "CalcANZ function\n");
+    python::def("CalcANI", RDKit::Descriptors::Osmordred::calcANI,
+        "CalcANI function\n");
+    python::def("CalcDSZ", RDKit::Descriptors::Osmordred::calcDSZ,
+        "CalcDSZ function\n");
+    python::def("CalcANN", RDKit::Descriptors::Osmordred::calcANN,
+        "CalcANN function\n");
+    python::def("CalcDN2Z", RDKit::Descriptors::Osmordred::calcDN2Z,
+        "CalcDN2Z function\n");
+    python::def("CalcANMat", RDKit::Descriptors::Osmordred::calcANMat,
+        "CalcANMat function\n");
+    python::def("CalcAZMat", RDKit::Descriptors::Osmordred::calcAZMat,
+        "CalcAZMat function\n");
+    python::def("CalcASMat", RDKit::Descriptors::Osmordred::calcASMat,
+        "CalcASMat function\n");
+    python::def("CalcDSMat", RDKit::Descriptors::Osmordred::calcDSMat,
+        "CalcDSMat function\n");
+    python::def("CalcDN2Mat", RDKit::Descriptors::Osmordred::calcDN2Mat,
+        "CalcDN2Mat function\n");
+    python::def("CalcFrags", RDKit::Descriptors::Osmordred::calcFrags,
+        "CalcFrags function\n");
+    python::def("CalcAddFeatures", RDKit::Descriptors::Osmordred::calcAddFeatures,
+        "CalcAddFeatures function\n");
+    python::def("CalcInformationContent", RDKit::Descriptors::Osmordred::calcInformationContent,
+        "CalcInformationContent function\n");
+
+    // Fast aggregate binding
+    python::def("CalcOsmordred", RDKit::Descriptors::Osmordred::calcOsmordred,
+        "Compute all Osmordred descriptors at once (fast path)\n");
+    
+    // v2.0: Single molecule with timeout protection (all-or-nothing)
+    python::def("CalcOsmordredWithTimeout",
+        +[](const RDKit::ROMol& mol, int timeout_seconds) {
+            return RDKit::Descriptors::Osmordred::calcOsmordredWithTimeout(mol, timeout_seconds);
+        },
+        (python::arg("mol"), python::arg("timeout_seconds")=60),
+        "Compute Osmordred descriptors with timeout protection (default 60 seconds).\n"
+        "Returns NaN vector (3585 NaN values) if computation exceeds timeout.\n"
+        "This is the RECOMMENDED function to prevent hanging on complex molecules.\n");
+    
+    // v2.0: Batch version with parallel processing and timeout
+    python::def("CalcOsmordredBatch",
+        +[](const std::vector<std::string>& smiles_list, int n_jobs) {
+            return RDKit::Descriptors::Osmordred::calcOsmordredBatch(smiles_list, n_jobs);
+        },
+        (python::arg("smiles_list"), python::arg("n_jobs")=0),
+        "BATCH: Compute all Osmordred descriptors for multiple molecules in parallel.\n"
+        "Each molecule has a 60-second timeout - returns NaN if exceeded.\n"
+        "Returns vector of descriptor vectors (one per molecule).\n");
+    
+    // v2.0: Batch from mol objects (preserves tautomer canonical)
+    python::def("CalcOsmordredBatchFromMols",
+        +[](const python::list& mol_list, int n_jobs) {
+            std::vector<std::unique_ptr<RDKit::ROMol>> owned;
+            std::vector<const RDKit::ROMol*> mols;
+            owned.reserve(python::len(mol_list));
+            mols.reserve(python::len(mol_list));
+            for (int i = 0; i < python::len(mol_list); ++i) {
+                python::object obj = mol_list[i];
+                if (obj.is_none()) {
+                    mols.push_back(nullptr);
+                    continue;
+                }
+                try {
+                    const RDKit::ROMol& mol = python::extract<const RDKit::ROMol&>(obj);
+                    mols.push_back(&mol);
+                } catch (...) {
+                    mols.push_back(nullptr);
+                }
+            }
+            return RDKit::Descriptors::Osmordred::calcOsmordredBatchFromMols(mols, n_jobs);
+        },
+        (python::arg("mols"), python::arg("n_jobs")=0),
+        "BATCH: Compute Osmordred descriptors from mol objects.\n"
+        "Accepts list of RDKit Mol objects (can contain None). Returns NaN row for invalid/failed.\n");
+
+    python::def("GetOsmordredDescriptorNames", RDKit::Descriptors::Osmordred::getOsmordredDescriptorNames,
+        "Get descriptor names in the same order as CalcOsmordred returns values.\n"
+        "Returns a list of strings where multi-value descriptors have suffixes like '_1', '_2', etc.\n");
+
+    python::def("HasOsmordredSupport", RDKit::Descriptors::Osmordred::hasOsmordredSupport,
+	"Returns True if the RDKit is compiled with osmordred support, False otherwise.\n"
+	"If false, all osmordred functions return zero or empty vectors.");
+#endif // osmordred
 }
