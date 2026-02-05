@@ -29,7 +29,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#define RDK_BUILD_OSMORDRED_SUPPORT 1
 #include "Osmordred.h"
 #include <boost/functional/hash.hpp> // For custom hashing of pairs
 #include <GraphMol/MolOps.h>
@@ -37,17 +36,6 @@
 #include <GraphMol/Substruct/SubstructMatch.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/SmilesParse/SmilesWrite.h>
-#include <GraphMol/RingInfo.h>
-#include <RDGeneral/RDThreads.h>
-#include <future>
-
-// Abraham V2 model includes
-#include "AbrahamGBAABRAHAM.h"
-#include "AbrahamGBSABRAHAM.h"
-#include "AbrahamRidgeBABRAHAM.h"
-#include "AbrahamRidgeEABRAHAM.h"
-#include "AbrahamRidgeLABRAHAM.h"
-#include "AbrahamRidgeVABRAHAM.h"
 
 #include <GraphMol/Descriptors/MolDescriptors.h>
 #include <GraphMol/PeriodicTable.h>
@@ -70,7 +58,6 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
-#include <iostream> // For std::cerr error logging
 #include <algorithm>
 #include <limits>
 #include <climits>
@@ -94,7 +81,11 @@
 #include <Eigen/Dense> // we should try to remove those...
 #include <GraphMol/PartialCharges/GasteigerCharges.h>
 #include <GraphMol/PartialCharges/GasteigerParams.h>
+#include <GraphMol/RingInfo.h>
+#include <RDGeneral/RDThreads.h>
 #include <lapacke.h>
+#include <future>
+#include <chrono>
 #endif
 
 // Define a custom hash function for std::pair<int, int>
@@ -114,6 +105,22 @@ namespace Osmordred {
 #ifdef RDK_BUILD_OSMORDRED_SUPPORT
 bool hasOsmordredSupport() { return true; }
 
+// v2.0: Filter function to check if a molecule is too large (will cause hangs)
+// Returns true if molecule has >10 rings OR >200 heavy atoms
+// This prevents Osmordred.Calculate from hanging on very complex molecules
+bool isMoleculeTooLarge(const RDKit::ROMol &mol) {
+  const RDKit::RingInfo *ri = mol.getRingInfo();
+  int numRings = 0;
+  if (ri && ri->isInitialized()) {
+    numRings = ri->numRings();
+  }
+  
+  int numHeavyAtoms = mol.getNumHeavyAtoms();
+  
+  // Filter: >10 rings OR >200 heavy atoms
+  return (numRings > 10 || numHeavyAtoms > 200);
+}
+
 namespace {    
 void solveLinearSystem(const ROMol &mol, std::vector<double>& A, std::vector<double>& B,
 		       int n, int nrhs, bool& success) {
@@ -123,10 +130,11 @@ void solveLinearSystem(const ROMol &mol, std::vector<double>& A, std::vector<dou
 
     success = false; // Initialize success flag
 
-    // CRITICAL: Save original RHS before any LAPACK calls modify B
+    // CRITICAL FIX v2.0: Save original RHS before any LAPACK calls modify B
+    // LAPACK routines modify B in-place, even when they fail!
     std::vector<double> B_original = B;
 
-    // First, try dposv
+    // First, try dposv (Cholesky factorization for positive definite matrices)
     std::vector<double> A_copy = A; // Copy A because LAPACK modifies it
     info = LAPACKE_dposv(LAPACK_COL_MAJOR, 'U', n, nrhs, A_copy.data(), lda, B.data(), ldb);
 
@@ -134,20 +142,22 @@ void solveLinearSystem(const ROMol &mol, std::vector<double>& A, std::vector<dou
         success = true;
         return;
     } else {
-        // dposv failed; fall back to dgesv
-        // CRITICAL: Restore original RHS before calling dgesv (dposv modified B even though it failed!)
+        // dposv failed; fall back to dgesv (LU factorization)
+        // CRITICAL FIX v2.0: Restore original RHS before calling dgesv
+        // dposv modified B even though it failed!
         B = B_original;
         
         std::vector<int> ipiv(n); // Pivot array for dgesv
         A_copy = A; // Reset A because it was modified by dposv
         info = LAPACKE_dgesv(LAPACK_COL_MAJOR, n, nrhs, A_copy.data(), lda, ipiv.data(), B.data(), ldb);
+
         if (info == 0) {
             success = true;
             return;
         } else {
             // dgesv failed (singular matrix); fall back to dgelss (pseudo-inverse via SVD)
+            // CRITICAL FIX v2.0: Added dgelss fallback for singular matrices
             // This provides a minimum-norm least-squares solution when exact solution doesn't exist
-            // CRITICAL FIX: Restore original RHS before calling dgelss (dgesv modified B!)
             B = B_original; // Restore original RHS values
             
             std::vector<double> A_copy2 = A; // Fresh copy for dgelss
@@ -156,10 +166,9 @@ void solveLinearSystem(const ROMol &mol, std::vector<double>& A, std::vector<dou
             // Allocate workspace for dgelss
             std::vector<double> s(n); // Singular values
             int rank; // Rank of matrix
-            double rcond = 1e-15; // Condition number threshold (very small for pseudo-inverse)
+            double rcond = 1e-15; // Condition number threshold
             
             // dgelss computes least-squares solution: min ||Ax - b||_2
-            // For square matrices, this provides the pseudo-inverse solution
             info = LAPACKE_dgelss(LAPACK_COL_MAJOR, n, n, nrhs,
                                    A_copy2.data(), lda, B_copy.data(), ldb,
                                    s.data(), rcond, &rank);
@@ -170,9 +179,10 @@ void solveLinearSystem(const ROMol &mol, std::vector<double>& A, std::vector<dou
                 success = true;
                 return;
             } else {
-                // dgelss failed (pseudo-inverse failed) - this is a true error
+                // All solvers failed - this is a true error
                 std::string outputSmiles = RDKit::MolToSmiles(mol);
-                std::cerr << "ERROR: dgelss (pseudo-inverse) failed: info=" << info << ", Smiles:" << outputSmiles << "\n";
+                std::cerr << "ERROR: All LAPACK solvers failed (dposv, dgesv, dgelss): info=" 
+                          << info << ", Smiles:" << outputSmiles << "\n";
             }
         }
     }
@@ -206,22 +216,6 @@ int calcEndocyclicSingleBonds(const RDKit::ROMol &mol) {
   return nbonds;
 }
 
-// Filter function to check if a molecule is too large (will cause hangs)
-// Returns true if molecule has >10 rings OR >200 heavy atoms
-// This prevents Osmordred.Calculate from hanging on very complex molecules
-bool isMoleculeTooLarge(const RDKit::ROMol &mol) {
-  const RDKit::RingInfo *ri = mol.getRingInfo();
-  int numRings = 0;
-  if (ri && ri->isInitialized()) {
-    numRings = ri->numRings();
-  }
-  
-  int numHeavyAtoms = mol.getNumHeavyAtoms();
-  
-  // Filter: >10 rings OR >200 heavy atoms
-  return (numRings > 10 || numHeavyAtoms > 200);
-}
-
 static const std::vector<std::string> acidicSMARTS = {
     "[O;H1]-[C,S,P]=O", "[*;-;!$(*~[*;+])]", "[NH](S(=O)=O)C(F)(F)F",
     "n1nnnc1"};
@@ -234,7 +228,7 @@ static const std::vector<std::shared_ptr<RDKit::RWMol>> &GetAcidicSmarts() {
       if (mol) {
 	res.emplace_back(std::shared_ptr<RDKit::RWMol>(mol));
       } else {
-	std::cout << "Invalid SMARTS: " << smarts << std::endl;
+	std::cerr << "Invalid SMARTS: " << smarts << std::endl;
       }
     }
     return res;
@@ -261,7 +255,7 @@ static const std::vector<std::shared_ptr<RDKit::RWMol>>& GetBasicSmarts() {
               if (mol) {
                 res.emplace_back(std::shared_ptr<RDKit::RWMol>(mol));
               } else {
-                std::cout << "Invalid SMARTS: " << smarts << std::endl;
+                std::cerr << "Invalid SMARTS: " << smarts << std::endl;
               }
             }
             return res;
@@ -304,7 +298,7 @@ static const std::vector<std::shared_ptr<RDKit::RWMol>>& GetBasicSmarts() {
               if (mol) {
                 res.emplace_back(std::shared_ptr<RDKit::RWMol>(mol));
               } else {
-                std::cout << "Invalid SMARTS: " << smarts << std::endl;
+                std::cerr << "Invalid SMARTS: " << smarts << std::endl;
               }
             }
             return res;
@@ -342,7 +336,7 @@ static const std::vector<std::shared_ptr<RDKit::RWMol>> &GetSmarts() {
       if (mol) {
         res.emplace_back(std::shared_ptr<RDKit::RWMol>(mol));
       } else {
-        std::cout << "Invalid SMARTS: " << smarts << std::endl;
+        std::cerr << "Invalid SMARTS: " << smarts << std::endl;
       }
     }
     return res;
@@ -847,11 +841,7 @@ std::vector<double> calcAddFeatures(const RDKit::ROMol& mol) {
             }
         }
 
-        // Match RDKit Python `GraphDescriptors.BertzCT()`:
-        // if not connectionDict: connectionDict = {'a': 1}
-        if (connectionDict.empty()) {
-            connectionDict["a"] = 1.0;
-        }
+        if (connectionDict.empty()) return 0.0;
         if (atomTypeDict.empty()) return 0.0;
 
         // Calculate and return the final entropy-based complexity value
@@ -1910,7 +1900,7 @@ std::vector<double> calcIStateIndices(const RDKit::ROMol& mol){
                 res.emplace_back(std::shared_ptr<RDKit::RWMol>(mol),
                                  pair.second);
               } else {
-                std::cout << "Invalid SMARTS: " << pair.first << std::endl;
+                std::cerr << "Invalid SMARTS: " << pair.first << std::endl;
               }
             }
             return res;
@@ -2168,7 +2158,7 @@ std::vector<double> calcIStateIndices(const RDKit::ROMol& mol){
               if (mol) {
                 res.emplace_back(std::shared_ptr<RDKit::RWMol>(mol));
               } else {
-                std::cout << "Invalid SMARTS: " << smarts << std::endl;
+                std::cerr << "Invalid SMARTS: " << smarts << std::endl;
                 res.emplace_back(nullptr);  // Placeholder for invalid SMARTS
               }
             }
@@ -4486,7 +4476,7 @@ std::vector<double> calcPathCount(const RDKit::ROMol& mol) {
             }
 
             if (c <= 0) {
-                std::cout << "Error: Some properties are less than or equal to zero." << std::endl;
+                std::cerr << "Error: Some properties are less than or equal to zero." << std::endl;
                 return 0.0;  // Return 0 if any property is <= 0
             }
 
@@ -5026,11 +5016,11 @@ std::vector<double> calcDistMatrixDescsL(const RDKit::ROMol& mol) {
         try {
             RDKit::MolOps::sanitizeMol(*newMol, failedOps, RDKit::MolOps::SANITIZE_ALL ^ RDKit::MolOps::SANITIZE_PROPERTIES);
         } catch (const RDKit::MolSanitizeException& e) {
-            std::cout << "Sanitization failed: " << e.what() << "\n";
+            std::cerr << "Sanitization failed: " << e.what() << "\n";
         }
 
         if (failedOps > 0) {
-            std::cout << "Sanitization failed on some operations, continuing. Failed ops: " << failedOps << "\n";
+            std::cerr << "Sanitization failed on some operations, continuing. Failed ops: " << failedOps << "\n";
         }
 
         // Add explicit hydrogens if requested
@@ -5042,7 +5032,7 @@ std::vector<double> calcDistMatrixDescsL(const RDKit::ROMol& mol) {
         try {
             RDKit::MolOps::Kekulize(*newMol, false);
         } catch (const RDKit::KekulizeException& e) {
-            std::cout << "Kekulization failed: " << e.what() << "\n";
+            std::cerr << "Kekulization failed: " << e.what() << "\n";
         }
 
         return newMol;
@@ -5107,7 +5097,7 @@ std::vector<double> calcDistMatrixDescsL(const RDKit::ROMol& mol) {
             RDKit::MolOps::sanitizeMol(*clonedMol, failedOps, RDKit::MolOps::SANITIZE_ALL);
 
             if (failedOps > 0) {
-                std::cout << "Sanitization failed on properties, but continuing. Failed ops: " << failedOps << "\n";
+                std::cerr << "Sanitization failed on properties, but continuing. Failed ops: " << failedOps << "\n";
             }
 
             if (explicitHydrogens) {
@@ -5119,10 +5109,10 @@ std::vector<double> calcDistMatrixDescsL(const RDKit::ROMol& mol) {
 
             return clonedMol; // Return the modified clone
         } catch (const RDKit::MolSanitizeException& e) {
-            std::cout << "Sanitization failed: " << e.what() << "\n";
+            std::cerr << "Sanitization failed: " << e.what() << "\n";
             return nullptr; // Return nullptr if the modification fails
         } catch (const std::exception& e) {
-            std::cout << "Error cloning and modifying molecule: " << e.what() << "\n";
+            std::cerr << "Error cloning and modifying molecule: " << e.what() << "\n";
             return nullptr;
         }
     }
@@ -5695,7 +5685,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
     // Optional debug logging (enabled when OSMO_ETA_DEBUG is set)
     const char* eta_dbg = std::getenv("OSMO_ETA_DEBUG");
     if (eta_dbg) {
-        std::cout << "[ETA_DEBUG] hmol_atoms=" << hmol->getNumAtoms()
+        std::cerr << "[ETA_DEBUG] hmol_atoms=" << hmol->getNumAtoms()
                   << " hydrogens_in_hmol=" << debug_num_h_in_hmol
                   << " excluded_CH_for_eps5=" << debug_excluded_ch
                   << " epsilon_sum_type1=" << epsilon_sum_type1
@@ -5829,20 +5819,8 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         return results;
     }
 
-    // Fast aggregate: compute all 3585 descriptors from ROMol only (no SMILES anywhere).
-    // All descriptor families take const ROMol& mol. For same object (tautomer canonical)
-    // use calcOsmordredBatchFromMols(mols) with mols from Python ToBinary.
+    // Fast aggregate: compute all descriptors in C++ in one pass
     std::vector<double> calcOsmordred(const RDKit::ROMol& mol) {
-        // Early exit for molecules that are too large (prevents timeout/hanging)
-        constexpr unsigned int MAX_HEAVY_ATOMS = 200;
-        constexpr unsigned int MAX_RINGS = 30;
-        unsigned int nHeavy = mol.getNumHeavyAtoms();
-        unsigned int nRings = RDKit::Descriptors::calcNumRings(mol);
-        if (nHeavy > MAX_HEAVY_ATOMS || nRings > MAX_RINGS) {
-            // Return 3585 NaN values for oversized molecules
-            return std::vector<double>(3585, std::nan(""));
-        }
-        
         // Silence RDKit warnings locally
         RDLog::LogStateSetter guard;
 
@@ -5877,15 +5855,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         appendInt(calcAromatic(mol));
         appendInt(calcAtomCounts(mol));
         append(calcAutoCorrelation(mol));
-        try {
-            append(calcBCUTs(mol));
-        } catch (...) {
-            // BCUT can throw (e.g. bond order invariant); match Python: fill BCUT slots with NaN
-            constexpr int BCUT_COUNT = 24;
-            for (int i = 0; i < BCUT_COUNT; ++i) {
-                out.push_back(std::numeric_limits<double>::quiet_NaN());
-            }
-        }
+        append(calcBCUTs(mol));
         append(calcBalabanJ(mol));
         // Use L variant (faster), to match Python CalcBaryszMatrix
         append(calcBaryszMatrixDescsL(mol));
@@ -5893,15 +5863,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         appendInt(calcBondCounts(mol));
         append(calcRNCG_RPCG(mol));
         append(calcCarbonTypes(mol));
-        
-        auto chi_result = calcAllChiDescriptors(mol);
-        bool chi_has_nan = std::any_of(chi_result.begin(), chi_result.end(), 
-                                        [](double x) { return std::isnan(x) || std::isinf(x); });
-        if (chi_has_nan) {
-            std::cerr << "ERROR: calcAllChiDescriptors contains NaN/Inf! size=" << chi_result.size() 
-                      << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        }
-        append(chi_result);
+        append(calcAllChiDescriptors(mol));
         append(calcConstitutional(mol));
         append(calcDetourMatrixDescsL(mol));
         append(calcDistMatrixDescsL(mol));
@@ -5941,32 +5903,8 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         append(calcHEStateDescs(mol));
         append(calcBEStateDescs(mol));
         append(calcAbrahams(mol));
-        auto anmat_result = calcANMat(mol);
-        if (anmat_result.size() != 25) {
-            std::cerr << "ERROR: calcANMat wrong size! expected=25, got=" 
-                      << anmat_result.size() << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        }
-        bool anmat_has_nan = std::any_of(anmat_result.begin(), anmat_result.end(), 
-                                         [](double x) { return std::isnan(x) || std::isinf(x); });
-        if (anmat_has_nan) {
-            std::cerr << "ERROR: calcANMat contains NaN/Inf! size=" 
-                      << anmat_result.size() << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        }
-        append(anmat_result);
-        
-        auto asmat_result = calcASMat(mol);
-        bool asmat_has_nan = std::any_of(asmat_result.begin(), asmat_result.end(), 
-                                         [](double x) { return std::isnan(x) || std::isinf(x); });
-        if (asmat_has_nan) {
-            std::cerr << "ERROR: calcASMat contains NaN/Inf! size=" 
-                      << asmat_result.size() << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        }
-        if (asmat_result.size() != 20) {
-            std::cerr << "ERROR: calcASMat wrong size! expected=20, got=" 
-                      << asmat_result.size() << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        }
-        append(asmat_result);
-        
+        append(calcANMat(mol));
+        append(calcASMat(mol));
         append(calcAZMat(mol));
         append(calcDSMat(mol));
         append(calcDN2Mat(mol));
@@ -5976,135 +5914,10 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         return out;
     }
 
-    // Timeout constant for Osmordred computation (60 seconds = 1 minute)
+    // v2.0: Timeout constant for Osmordred computation (60 seconds = 1 minute)
     constexpr int OSMORDRED_TIMEOUT_SECONDS = 60;
-    // Per-family timeout (5 seconds per descriptor family)
-    constexpr int OSMORDRED_FAMILY_TIMEOUT_SECONDS = 5;
     
-    // Helper: compute a descriptor family with timeout, return NaN vector of expected size on timeout
-    template<typename Func>
-    std::vector<double> computeWithTimeout(Func func, size_t expected_size, int timeout_ms = 5000) {
-        auto future = std::async(std::launch::async, func);
-        auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
-        if (status == std::future_status::ready) {
-            try {
-                return future.get();
-            } catch (...) {
-                return std::vector<double>(expected_size, std::numeric_limits<double>::quiet_NaN());
-            }
-        }
-        // Timeout - return NaN
-        return std::vector<double>(expected_size, std::numeric_limits<double>::quiet_NaN());
-    }
-    
-    template<typename Func>
-    std::vector<double> computeIntWithTimeout(Func func, size_t expected_size, int timeout_ms = 5000) {
-        auto future = std::async(std::launch::async, func);
-        auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
-        if (status == std::future_status::ready) {
-            try {
-                std::vector<int> result = future.get();
-                std::vector<double> out;
-                out.reserve(result.size());
-                for (int x : result) out.push_back(static_cast<double>(x));
-                return out;
-            } catch (...) {
-                return std::vector<double>(expected_size, std::numeric_limits<double>::quiet_NaN());
-            }
-        }
-        return std::vector<double>(expected_size, std::numeric_limits<double>::quiet_NaN());
-    }
-    
-    // NEW: Osmordred with PER-FAMILY timeout (5 seconds per family)
-    // If a descriptor family times out, ONLY that family = NaN, rest continues
-    RDKIT_DESCRIPTORS_EXPORT std::vector<double> calcOsmordredWithPartialTimeout(
-        const RDKit::ROMol& mol, int family_timeout_ms) {
-        
-        // Early exit for molecules that are too large
-        constexpr unsigned int MAX_HEAVY_ATOMS = 200;
-        constexpr unsigned int MAX_RINGS = 30;
-        unsigned int nHeavy = mol.getNumHeavyAtoms();
-        unsigned int nRings = RDKit::Descriptors::calcNumRings(mol);
-        if (nHeavy > MAX_HEAVY_ATOMS || nRings > MAX_RINGS) {
-            return std::vector<double>(3585, std::numeric_limits<double>::quiet_NaN());
-        }
-        
-        int timeout = family_timeout_ms > 0 ? family_timeout_ms : (OSMORDRED_FAMILY_TIMEOUT_SECONDS * 1000);
-        
-        std::vector<double> out;
-        out.reserve(4200);
-        
-        auto append = [&out](const std::vector<double>& v) { 
-            out.insert(out.end(), v.begin(), v.end()); 
-        };
-        
-        // Each family computed with timeout - sizes from Osmordred documentation
-        // Family name, expected size, computation
-        append(computeWithTimeout([&]() { return calcABCIndex(mol); }, 1, timeout));           // 1
-        append(computeIntWithTimeout([&]() { return calcAcidBase(mol); }, 2, timeout));        // 2
-        append(computeWithTimeout([&]() { return calcAdjMatrixDescsL(mol); }, 148, timeout));  // 148
-        append(computeIntWithTimeout([&]() { return calcAromatic(mol); }, 3, timeout));        // 3
-        append(computeIntWithTimeout([&]() { return calcAtomCounts(mol); }, 16, timeout));     // 16
-        append(computeWithTimeout([&]() { return calcAutoCorrelation(mol); }, 192, timeout));  // 192
-        append(computeWithTimeout([&]() { return calcBCUTs(mol); }, 6, timeout));              // 6
-        append(computeWithTimeout([&]() { return calcBalabanJ(mol); }, 1, timeout));           // 1
-        append(computeWithTimeout([&]() { return calcBaryszMatrixDescsL(mol); }, 148, timeout)); // 148
-        append(computeWithTimeout([&]() { return calcBertzCT(mol); }, 1, timeout));            // 1
-        append(computeIntWithTimeout([&]() { return calcBondCounts(mol); }, 9, timeout));      // 9
-        append(computeWithTimeout([&]() { return calcRNCG_RPCG(mol); }, 2, timeout));          // 2
-        append(computeWithTimeout([&]() { return calcCarbonTypes(mol); }, 10, timeout));       // 10
-        append(computeWithTimeout([&]() { return calcAllChiDescriptors(mol); }, 76, timeout)); // 76
-        append(computeWithTimeout([&]() { return calcConstitutional(mol); }, 16, timeout));    // 16
-        append(computeWithTimeout([&]() { return calcDetourMatrixDescsL(mol); }, 148, timeout)); // 148
-        append(computeWithTimeout([&]() { return calcDistMatrixDescsL(mol); }, 148, timeout)); // 148
-        append(computeWithTimeout([&]() { return calcEStateDescs(mol, true); }, 316, timeout)); // 316
-        append(computeWithTimeout([&]() { return calcEccentricConnectivityIndex(mol); }, 1, timeout)); // 1
-        append(computeWithTimeout([&]() { return calcExtendedTopochemicalAtom(mol); }, 80, timeout)); // 80
-        append(computeWithTimeout([&]() { return calcFragmentComplexity(mol); }, 1, timeout)); // 1
-        append(computeWithTimeout([&]() { return calcFramework(mol); }, 1, timeout));          // 1
-        append(computeWithTimeout([&]() { return calcHydrogenBond(mol); }, 2, timeout));       // 2
-        append(computeWithTimeout([&]() { return calcLogS(mol); }, 1, timeout));               // 1
-        append(computeWithTimeout([&]() { return calcInformationContent(mol, 5); }, 33, timeout)); // 33
-        append(computeWithTimeout([&]() { return calcKappaShapeIndex(mol); }, 3, timeout));    // 3
-        append(computeIntWithTimeout([&]() { return calcLipinskiGhose(mol); }, 6, timeout));   // 6
-        append(computeWithTimeout([&]() { return calcMcGowanVolume(mol); }, 1, timeout));      // 1
-        append(computeWithTimeout([&]() { return calcMoeType(mol); }, 60, timeout));           // 60
-        append(computeWithTimeout([&]() { return calcMolecularDistanceEdgeDescs(mol); }, 19, timeout)); // 19
-        append(computeWithTimeout([&]() { return calcMolecularId(mol); }, 1, timeout));        // 1
-        append(computeWithTimeout([&]() { return calcPathCount(mol); }, 16, timeout));         // 16
-        append(computeWithTimeout([&]() { return calcPolarizability(mol); }, 2, timeout));     // 2
-        append(computeIntWithTimeout([&]() { return calcRingCount(mol); }, 6, timeout));       // 6
-        append(computeWithTimeout([&]() { return calcRotatableBond(mol); }, 1, timeout));      // 1
-        append(computeWithTimeout([&]() { return calcSLogP(mol); }, 2, timeout));              // 2
-        append(computeWithTimeout([&]() { return calcTopoPSA(mol); }, 1, timeout));            // 1
-        append(computeWithTimeout([&]() { return calcTopologicalChargeDescs(mol); }, 21, timeout)); // 21
-        append(computeWithTimeout([&]() { return calcTopologicalIndex(mol); }, 10, timeout)); // 10
-        append(computeWithTimeout([&]() { return calcVdwVolumeABC(mol); }, 1, timeout));       // 1
-        append(computeWithTimeout([&]() { return calcVertexAdjacencyInformation(mol); }, 1, timeout)); // 1
-        append(computeWithTimeout([&]() { return calcWalkCounts(mol); }, 10, timeout));        // 10
-        append(computeWithTimeout([&]() { return calcWeight(mol); }, 2, timeout));             // 2
-        append(computeIntWithTimeout([&]() { return calcWienerIndex(mol); }, 2, timeout));     // 2
-        append(computeWithTimeout([&]() { return calcZagrebIndex(mol); }, 2, timeout));        // 2
-        append(computeWithTimeout([&]() { return calcPol(mol); }, 1, timeout));                // 1
-        append(computeWithTimeout([&]() { return calcMR(mol); }, 1, timeout));                 // 1
-        append(computeWithTimeout([&]() { return calcFlexibility(mol); }, 1, timeout));        // 1
-        append(computeWithTimeout([&]() { return calcSchultz(mol); }, 2, timeout));            // 2
-        append(computeWithTimeout([&]() { return calcAlphaKappaShapeIndex(mol); }, 3, timeout)); // 3
-        append(computeWithTimeout([&]() { return calcHEStateDescs(mol); }, 79, timeout));      // 79
-        append(computeWithTimeout([&]() { return calcBEStateDescs(mol); }, 91, timeout));      // 91
-        append(computeWithTimeout([&]() { return calcAbrahams(mol); }, 5, timeout));           // 5
-        append(computeWithTimeout([&]() { return calcANMat(mol); }, 25, timeout));             // 25
-        append(computeWithTimeout([&]() { return calcASMat(mol); }, 20, timeout));             // 20
-        append(computeWithTimeout([&]() { return calcAZMat(mol); }, 15, timeout));             // 15
-        append(computeWithTimeout([&]() { return calcDSMat(mol); }, 10, timeout));             // 10
-        append(computeWithTimeout([&]() { return calcDN2Mat(mol); }, 10, timeout));            // 10
-        append(computeWithTimeout([&]() { return calcFrags(mol); }, 85, timeout));             // 85
-        append(computeWithTimeout([&]() { return calcAddFeatures(mol); }, 1613, timeout));     // 1613
-        
-        return out;
-    }
-    
-    // Single molecule with timeout protection (original - all or nothing)
+    // v2.0: Single molecule with timeout protection (all-or-nothing)
     // Returns NaN vector if computation exceeds timeout_seconds
     RDKIT_DESCRIPTORS_EXPORT std::vector<double> calcOsmordredWithTimeout(
         const RDKit::ROMol& mol, int timeout_seconds) {
@@ -6124,7 +5937,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         }
     }
     
-    // Batch version from SMILES: parses each SMILES -> NEW mol (tautomer canonical LOST).
+    // v2.0: Batch version from SMILES: parses each SMILES -> NEW mol (tautomer canonical LOST).
     // For tautomer-canonical mols use calcOsmordredBatchFromMols(mols) with mols from ToBinary.
     RDKIT_DESCRIPTORS_EXPORT std::vector<std::vector<double>> calcOsmordredBatch(
         const std::vector<std::string>& smiles_list, int n_jobs) {
@@ -6137,7 +5950,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         if (nThreads <= 1 || smiles_list.size() < 10) {
             for (const auto& smi : smiles_list) {
                 auto future = std::async(std::launch::async, [&smi]() {
-                    ROMol* mol = SmilesToMol(smi);  // NEW mol from SMILES (no tautomer)
+                    ROMol* mol = SmilesToMol(smi);
                     if (mol) {
                         auto desc = calcOsmordred(*mol);
                         delete mol;
@@ -6150,7 +5963,6 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
                 if (status == std::future_status::ready) {
                     results.push_back(future.get());
                 } else {
-                    // Timeout - return NaN vector
                     results.push_back(std::vector<double>(3585, std::numeric_limits<double>::quiet_NaN()));
                 }
             }
@@ -6161,7 +5973,6 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         std::vector<std::future<std::vector<double>>> futures;
         futures.reserve(smiles_list.size());
         
-        // Process molecules in parallel
         for (size_t idx = 0; idx < smiles_list.size(); ++idx) {
             const auto& smi = smiles_list[idx];
             
@@ -6186,13 +5997,11 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
             }));
         }
         
-        // Collect results with timeout
         for (auto& f : futures) {
             auto status = f.wait_for(std::chrono::seconds(OSMORDRED_TIMEOUT_SECONDS));
             if (status == std::future_status::ready) {
                 results.push_back(f.get());
             } else {
-                // Timeout - return NaN vector
                 results.push_back(std::vector<double>(3585, std::numeric_limits<double>::quiet_NaN()));
             }
         }
@@ -6200,7 +6009,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         return results;
     }
 
-    // Batch version from mol objects: PRESERVES tautomer canonical (same object for all 3585 features).
+    // v2.0: Batch version from mol objects: PRESERVES tautomer canonical.
     // Python binding uses mol.ToBinary() -> MolPickler::molFromPickle -> these mols.
     RDKIT_DESCRIPTORS_EXPORT std::vector<std::vector<double>> calcOsmordredBatchFromMols(
         const std::vector<const ROMol*>& mols, int n_jobs) {
@@ -6253,12 +6062,11 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         return results;
     }
 
-    // Get descriptor names in the same order as calcOsmordred returns values
+    // v2.0: Get descriptor names in the same order as calcOsmordred returns values
     std::vector<std::string> getOsmordredDescriptorNames() {
         std::vector<std::string> names;
-        names.reserve(3585); // Reserve approximate size to avoid reallocations
+        names.reserve(3585);
         
-        // Helper function to add names with suffix
         auto addNames = [&names](const std::string& baseName, int count) {
             if (count == 1) {
                 names.push_back(baseName);
@@ -7042,7 +6850,7 @@ std::vector<double> calculateETADescriptors(const RDKit::ROMol& mol) {
                 addToQueries(queries, entry.first,
                              std::shared_ptr<RDKit::RWMol>(mol));
               } else {
-                std::cout << "Invalid SMARTS: " << entry.second << std::endl;
+                std::cerr << "Invalid SMARTS: " << entry.second << std::endl;
               }
             }
             return queries;
@@ -7063,7 +6871,7 @@ std::vector<double> calculateETADescriptors(const RDKit::ROMol& mol) {
                 addToQueries(queries, entry.first,
                              std::shared_ptr<RDKit::RWMol>(mol));
               } else {
-                std::cout << "Invalid SMARTS: " << entry.second << std::endl;
+                std::cerr << "Invalid SMARTS: " << entry.second << std::endl;
               }
             }
             return queries;
@@ -7085,7 +6893,7 @@ std::vector<double> calculateETADescriptors(const RDKit::ROMol& mol) {
                 addToQueries(queries, entry.first,
                              std::shared_ptr<RDKit::RWMol>(mol));
               } else {
-                std::cout << "Invalid SMARTS: " << entry.second << std::endl;
+                std::cerr << "Invalid SMARTS: " << entry.second << std::endl;
               }
             }
             return queries;
@@ -7515,14 +7323,8 @@ std::vector<double> calcAllChiDescriptors(const RDKit::ROMol& mol) {
         auto idx = atom->getIdx();
         sigmaElectrons[idx] = getSigmaElectrons(*atom);
         valenceElectrons[idx] = getValenceElectrons(*atom);
-        // Fix division by zero: if sigmaElectrons or valenceElectrons is 0, skip contribution
-        // (1.0 / sqrt(0) would be inf)
-        if (sigmaElectrons[idx] > 0.0) {
-            path_0_xd += 1.0 / std::sqrt(sigmaElectrons[idx]);
-        }
-        if (valenceElectrons[idx] > 0.0) {
-            path_0_xdv += 1.0 / std::sqrt(valenceElectrons[idx]);
-        }
+        path_0_xd += 1.0 / std::sqrt(sigmaElectrons[idx]);
+        path_0_xdv += 1.0 / std::sqrt(valenceElectrons[idx]);
     }
 
     // Path-specific accumulators for totals and averages
@@ -7532,11 +7334,9 @@ std::vector<double> calcAllChiDescriptors(const RDKit::ROMol& mol) {
 
     // Store Path results for order 0
     results[24] = path_0_xd;                     // Total Xp-0d
-    // Fix division by zero: if molecule has no atoms (shouldn't happen, but safety check)
-    int num_atoms = static_cast<int>(mol.getNumAtoms());
-    results[32] = (num_atoms > 0) ? (path_0_xd / num_atoms) : 0.0; // Average Xp-0d
+    results[32] = path_0_xd / mol.getNumAtoms(); // Average Xp-0d
     results[40] = path_0_xdv;                    // Total Xp-0dv
-    results[48] = (num_atoms > 0) ? (path_0_xdv / num_atoms) : 0.0; // Average Xp-0dv
+    results[48] = path_0_xdv / mol.getNumAtoms(); // Average Xp-0dv
 
     for (int order = 1; order <= 7; ++order) {
         auto classifiedPaths = extractAndClassifyPaths(mol, order, false);
@@ -7622,22 +7422,9 @@ std::vector<double> calcAllChiDescriptors(const RDKit::ROMol& mol) {
     // Finalize Path results
     for (int order = 1; order <= 7; ++order) {
         results[24 + order] = path_xd[order];                        // Total path xd
-        // Calculate average: if no paths exist, path_node_counts[order] == 0 and path_xd[order] == 0.0
-        // When both numerator and denominator are 0, returning 0.0 is correct:
-        // "no paths = zero contribution = zero average"
-        if (path_node_counts[order] > 0) {
-            results[32 + order] = path_xd[order] / path_node_counts[order]; // Average path xd
-        } else {
-            // No paths of this order: both sum and count are 0, so average is correctly 0
-            results[32 + order] = 0.0;
-        }
+        results[32 + order] = path_xd[order] / path_node_counts[order]; // Average path xd
         results[40 + order] = path_xdv[order];                       // Total path xdv
-        if (path_node_counts[order] > 0) {
-            results[48 + order] = path_xdv[order] / path_node_counts[order]; // Average path xdv
-        } else {
-            // No paths of this order: both sum and count are 0, so average is correctly 0
-            results[48 + order] = 0.0;
-        }
+        results[48 + order] = path_xdv[order] / path_node_counts[order]; // Average path xdv
     }
 
 
@@ -7784,18 +7571,13 @@ std::vector<double> calcAllChiDescriptors(const RDKit::ROMol& mol) {
 
 
 
-// Control function to check if Gasteiger parameters exist for all atoms BEFORE calling computeGasteigerCharges
-// This function reproduces EXACTLY the logic used by computeGasteigerCharges to determine parameters for each atom
-// based on its environment (hybridization, neighbors, etc.)
-// 
-// IMPORTANT: If ONE atom doesn't have parameters for its specific environment, the ENTIRE Gasteiger calculation
-// is INVALID. This function prevents computeGasteigerCharges from throwing an error by checking beforehand.
+// v2.0: Control function to check if Gasteiger parameters exist for all atoms
+// BEFORE calling computeGasteigerCharges. This prevents crashes on unusual elements
+// like Hg (mercury) or certain phosphorus environments.
 //
 // Returns:
-//   - true: All atoms have parameters for their specific environment -> safe to call computeGasteigerCharges
-//   - false: At least one atom lacks parameters -> DO NOT call computeGasteigerCharges, return NaN instead
-//
-// This check is done BEFORE adding hydrogens to avoid issues with hybridization changes
+//   - true: All atoms have parameters -> safe to call computeGasteigerCharges
+//   - false: At least one atom lacks parameters -> return NaN instead
 bool checkGasteigerParameters(const RDKit::ROMol& mol) {
     PeriodicTable *table = PeriodicTable::getTable();
     const GasteigerParams *params = GasteigerParams::getParams();
@@ -7806,7 +7588,6 @@ bool checkGasteigerParameters(const RDKit::ROMol& mol) {
         std::string mode;
         
         // Reproduce EXACTLY the logic from computeGasteigerCharges to determine mode
-        // The mode depends on the atom's hybridization and environment
         switch (atom->getHybridization()) {
             case Atom::SP3:
                 mode = "sp3";
@@ -7818,15 +7599,14 @@ bool checkGasteigerParameters(const RDKit::ROMol& mol) {
                 mode = "sp";
                 break;
             default:
-                // For atoms with unspecified hybridization, determine mode based on element and environment
+                // For atoms with unspecified hybridization, determine mode based on element
                 if (atom->getAtomicNum() == 1) {
-                    // Hydrogen always uses "*" mode
-                    mode = "*";
+                    mode = "*"; // Hydrogen always uses "*" mode
                 } else if (atom->getAtomicNum() == 16) {
-                    // Sulfur: check oxygen neighbors to determine mode (so2, so, or sp3)
+                    // Sulfur: check oxygen neighbors
                     ROMol::ADJ_ITER nbrIdx, endIdx;
                     boost::tie(nbrIdx, endIdx) = mol.getAtomNeighbors(atom);
-                    int no = 0; // Count oxygen neighbors
+                    int no = 0;
                     while (nbrIdx != endIdx) {
                         if (mol.getAtomWithIdx(*nbrIdx)->getAtomicNum() == 8) {
                             no++;
@@ -7834,38 +7614,32 @@ bool checkGasteigerParameters(const RDKit::ROMol& mol) {
                         nbrIdx++;
                     }
                     if (no == 2) {
-                        mode = "so2"; // Sulfur with 2 oxygen neighbors
+                        mode = "so2";
                     } else if (no == 1) {
-                        mode = "so";  // Sulfur with 1 oxygen neighbor
+                        mode = "so";
                     } else {
-                        mode = "sp3"; // Default for sulfur
+                        mode = "sp3";
                     }
                 } else {
-                    // For other atoms with unspecified hybridization, default to sp3
-                    mode = "sp3";
+                    mode = "sp3"; // Default
                 }
         }
         
-        // Check if parameters exist for this specific element + mode combination
-        // If parameters don't exist, the ENTIRE Gasteiger calculation is invalid
-        // We use throwOnFailure=true to get an exception if parameters are missing
+        // Check if parameters exist for this element + mode
         try {
             params->getParams(elem, mode, true);
         } catch (...) {
-            // Parameters don't exist for this atom's specific environment
-            // Examples: Hg (mercury), P IV (phosphorus in certain environments), etc.
-            // If ONE atom fails, the ENTIRE calculation is invalid -> return false immediately
+            // Parameters don't exist (e.g., Hg, certain P environments)
             return false;
         }
     }
     
-    // All atoms have parameters for their specific environments -> safe to call computeGasteigerCharges
     return true;
 }
 
 std::vector<double> calcRNCG_RPCG(const RDKit::ROMol& mol){
         // subclass of CPSA using only 2D descriptors available in Mordred v1
-        // Check Gasteiger parameters first (on original mol, before adding H)
+        // v2.0: Check Gasteiger parameters first (on original mol, before adding H)
         if (!checkGasteigerParameters(mol)) {
             return {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
         }
@@ -7877,69 +7651,48 @@ std::vector<double> calcRNCG_RPCG(const RDKit::ROMol& mol){
         double totalneg =0;
         double totalpos =0;
 
-        // Try to compute Gasteiger charges (parameters already checked, but catch exceptions as safety net)
+        // v2.0: Try-catch as safety net
         try {
             computeGasteigerCharges(*hmol, 12, true);
         } catch (...) {
-            // Gasteiger failed - return NaN
             return {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
         }
 
-        // Check if any charges are NaN (even if computeGasteigerCharges didn't throw)
-        bool has_nan_charges = false;
         for (auto &atom : hmol->atoms()) {
-            double ch = atom->getProp<double>(common_properties::_GasteigerCharge);
+                double ch = atom->getProp<double>(common_properties::_GasteigerCharge);
 
-            if (std::isnan(ch)) {
-                has_nan_charges = true;
-                break;
-            }
-
-            if (atom->hasProp(common_properties::_GasteigerHCharge)) {
-                double hch = atom->getProp<double>(common_properties::_GasteigerHCharge);
-                if (std::isnan(hch)) {
-                    has_nan_charges = true;
-                    break;
+                if (atom->hasProp(common_properties::_GasteigerHCharge)) {
+                    ch += atom->getProp<double>(common_properties::_GasteigerHCharge);
                 }
-                ch += hch;
-            }
 
-            // Check again after adding H charge
-            if (std::isnan(ch)) {
-                has_nan_charges = true;
-                break;
-            }
+                if (ch < 0) {
+                    totalneg += -ch;
+                    if (-ch > maxneg) {
+                        maxneg = -ch;
+                    }
 
-            if (ch < 0) {
-                totalneg += -ch;
-                if (-ch > maxneg) {
-                    maxneg = -ch;
+
                 }
-            }
-            else if ( ch > 0) {
-                totalpos += ch;
-                if (ch > maxpos) {
-                    maxpos = ch;
+                else if ( ch > 0) {
+                    totalpos += ch;
+                    if (ch > maxpos) {
+                        maxpos = ch;
+                    }
+
                 }
-            }
         }
-
-        // If any charges were NaN, return NaN for both values
-        if (has_nan_charges) {
-            return {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
-        }
-
         if (totalneg == 0 || totalpos == 0){
             return {0.,0.};
         }
         return {maxneg/totalneg, maxpos/totalpos};
 
 
+
 }
 
     // Function to compute BCUT descriptors for multiple properties
     std::vector<double> calcBCUTsEigen(const RDKit::ROMol& mol) {
-        // Check Gasteiger parameters first
+        // v2.0: Check Gasteiger parameters first
         bool gasteiger_ok = checkGasteigerParameters(mol);
         
         // Atomic properties to compute
@@ -7952,23 +7705,26 @@ std::vector<double> calcRNCG_RPCG(const RDKit::ROMol& mol){
         std::map<int, double> ionizationMap = ionizationEnergyAtomicMap();
 
         size_t numAtoms = mol.getNumAtoms();
-        std::vector<double> gasteigerCharges(numAtoms, 1.0); // Default to 1.0 if Gasteiger fails
+        std::vector<double> gasteigerCharges(numAtoms, 0.0);
         
-        // Try to compute Gasteiger charges only if parameters are OK
+        // v2.0: Only compute Gasteiger if parameters exist
         if (gasteiger_ok) {
             try {
                 computeGasteigerCharges(mol, 12, true);
-                for (auto &atom : mol.atoms()) {
+                for (size_t i = 0; i < numAtoms; ++i) {
+                    const auto* atom = mol.getAtomWithIdx(i);
                     double ch = atom->getProp<double>(common_properties::_GasteigerCharge);
                     if (atom->hasProp(common_properties::_GasteigerHCharge)) {
                         ch += atom->getProp<double>(common_properties::_GasteigerHCharge);
                     }
-                    gasteigerCharges[atom->getIdx()] = ch;
+                    gasteigerCharges[i] = ch;
                 }
             } catch (...) {
-                gasteiger_ok = false; // Mark as failed
+                // Gasteiger failed - charges stay at 0.0
+                gasteiger_ok = false;
             }
         }
+        // If gasteiger_ok is false, gasteigerCharges remains all zeros
 
         // Vector to store BCUT results
         std::vector<double> results;
@@ -7999,8 +7755,7 @@ std::vector<double> calcRNCG_RPCG(const RDKit::ROMol& mol){
             atomicProperties[11][i] = ionizationMap[atomNumber];                              // Ionization energy (i)
         }
         // Compute eigenvalues for each atomic property
-        for (size_t propIdx = 0; propIdx < atomicProperties.size(); ++propIdx) {
-            const auto& prop = atomicProperties[propIdx];
+        for (const auto& prop : atomicProperties) {
             Eigen::MatrixXd adjustedMatrix = burdenMatrix;
             for (size_t i = 0; i < numAtoms; ++i) {
                 adjustedMatrix(i, i) = prop[i];
@@ -8008,14 +7763,8 @@ std::vector<double> calcRNCG_RPCG(const RDKit::ROMol& mol){
 
             auto eigenValues = calcEigenValues(adjustedMatrix);
 
-            // If Gasteiger failed and this is the Gasteiger property (index 0), return NaN
-            if (!gasteiger_ok && propIdx == 0) {
-                results.push_back(std::numeric_limits<double>::quiet_NaN());
-                results.push_back(std::numeric_limits<double>::quiet_NaN());
-            } else {
-                results.push_back(eigenValues.maxCoeff());
-                results.push_back(eigenValues.minCoeff());
-            }
+            results.push_back(eigenValues.maxCoeff());
+            results.push_back(eigenValues.minCoeff());
         }
 
         return results;
@@ -8066,7 +7815,7 @@ std::vector<double> calcEigenValuesLAPACK(const std::vector<std::vector<double>>
 
 // Function to compute BCUT descriptors for multiple properties
 std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
-    // Check Gasteiger parameters first
+    // v2.0: Check Gasteiger parameters first
     bool gasteiger_ok = checkGasteigerParameters(mol);
     
     // Atomic properties to compute
@@ -8079,23 +7828,25 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
     std::map<int, double> ionizationMap = ionizationEnergyAtomicMap();
 
     size_t numAtoms = mol.getNumAtoms();
-    std::vector<double> gasteigerCharges(numAtoms, 1.0); // Default to 1.0 if Gasteiger fails
+    std::vector<double> gasteigerCharges(numAtoms, 0.0);
     
-    // Try to compute Gasteiger charges only if parameters are OK
+    // v2.0: Only compute Gasteiger if parameters exist
     if (gasteiger_ok) {
         try {
             computeGasteigerCharges(mol, 12, true);
-            for (auto &atom : mol.atoms()) {
+            for (size_t i = 0; i < numAtoms; ++i) {
+                const auto* atom = mol.getAtomWithIdx(i);
                 double ch = atom->getProp<double>(common_properties::_GasteigerCharge);
                 if (atom->hasProp(common_properties::_GasteigerHCharge)) {
                     ch += atom->getProp<double>(common_properties::_GasteigerHCharge);
                 }
-                gasteigerCharges[atom->getIdx()] = ch;
+                gasteigerCharges[i] = ch;
             }
         } catch (...) {
-            gasteiger_ok = false; // Mark as failed
+            // Gasteiger failed - charges stay at 0.0
         }
     }
+    // If gasteiger_ok is false, gasteigerCharges remains all zeros
 
     // Vector to store BCUT results
     std::vector<double> results;
@@ -8126,8 +7877,7 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
     }
 
     // Compute eigenvalues for each atomic property
-    for (size_t propIdx = 0; propIdx < atomicProperties.size(); ++propIdx) {
-        const auto& prop = atomicProperties[propIdx];
+    for (const auto& prop : atomicProperties) {
         // Adjust diagonal with atomic property
         auto adjustedMatrix = burdenMatrix;
         for (size_t i = 0; i < numAtoms; ++i) {
@@ -8136,14 +7886,8 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
 
         auto eigenValues = calcEigenValuesLAPACK(adjustedMatrix);
 
-        // If Gasteiger failed and this is the Gasteiger property (index 0), return NaN
-        if (!gasteiger_ok && propIdx == 0) {
-            results.push_back(std::numeric_limits<double>::quiet_NaN()); // Max eigenvalue
-            results.push_back(std::numeric_limits<double>::quiet_NaN()); // Min eigenvalue
-        } else {
-            results.push_back(*std::max_element(eigenValues.begin(), eigenValues.end())); // Max eigenvalue
-            results.push_back(*std::min_element(eigenValues.begin(), eigenValues.end())); // Min eigenvalue
-        }
+        results.push_back(*std::max_element(eigenValues.begin(), eigenValues.end())); // Max eigenvalue
+        results.push_back(*std::min_element(eigenValues.begin(), eigenValues.end())); // Min eigenvalue
     }
 
     return results;
@@ -8167,9 +7911,6 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
 
     // Function to compute the ATS descriptors
     std::vector<double> calcAutoCorrelationEigen(const RDKit::ROMol &mol) {
-        // Check Gasteiger parameters first (on original mol, before adding H)
-        bool gasteiger_ok = checkGasteigerParameters(mol);
-        
         std::unique_ptr<RDKit::ROMol> hmol(RDKit::MolOps::addHs(mol));
 
         double *dist = RDKit::MolOps::getDistanceMat(*hmol, false); // Topological matrix
@@ -8188,26 +7929,18 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
         Eigen::MatrixXd propertyMatrix(12, numAtoms);
         propertyMatrix.setZero();
 
-        // Compute Gasteiger charges only if parameters are OK
-        std::vector<double> gasteigerCharges(numAtoms, 1.0); // Default to 1.0 if Gasteiger fails
-        if (gasteiger_ok) {
-            try {
-                computeGasteigerCharges(*hmol, 12, true);
-                for (unsigned int i = 0; i < numAtoms; ++i) {
-                    const auto* atom = hmol->getAtomWithIdx(i);
-                    double charge = atom->getProp<double>(RDKit::common_properties::_GasteigerCharge);
-                    if (atom->hasProp(RDKit::common_properties::_GasteigerHCharge)) {
-                        charge += atom->getProp<double>(RDKit::common_properties::_GasteigerHCharge);
-                    }
-                    gasteigerCharges[i] = charge;
-                }
-            } catch (...) {
-                gasteiger_ok = false; // Mark as failed
-            }
-        }
+        // Compute Gasteiger charges
+        computeGasteigerCharges(*hmol, 12, true);
+        std::vector<double> gasteigerCharges(numAtoms, 0.0);
 
         for (unsigned int i = 0; i < numAtoms; ++i) {
             const auto* atom = hmol->getAtomWithIdx(i);
+            double charge = atom->getProp<double>(RDKit::common_properties::_GasteigerCharge);
+            if (atom->hasProp(RDKit::common_properties::_GasteigerHCharge)) {
+                charge += atom->getProp<double>(RDKit::common_properties::_GasteigerHCharge);
+            }
+            gasteigerCharges[i] = charge;
+
             int atomNumber = atom->getAtomicNum();
             propertyMatrix(0, i) = getValenceElectrons(*atom);
             propertyMatrix(1, i) = getSigmaElectrons(*atom);
@@ -8220,7 +7953,7 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
             propertyMatrix(8, i) = aremap[atomNumber];
             propertyMatrix(9, i) = pmap[atomNumber];
             propertyMatrix(10, i) = imap[atomNumber];
-            propertyMatrix(11, i) = gasteigerCharges[i]; // Gasteiger charge (index 11)
+            propertyMatrix(11, i) = gasteigerCharges[i]; // need to change order ...
 
         }
 
@@ -8298,62 +8031,34 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
         std::vector<double> autocorrDescriptors;
         autocorrDescriptors.reserve(606); // Pre-allocate memory for 606 elements
 
-        // Append ATSDescriptors (99 values, no Gasteiger)
+        // Append ATSDescriptors
         for (const auto &val : ATSDescriptors) {
             autocorrDescriptors.push_back(val);
         }
 
-        // Append AATSDescriptors (99 values, no Gasteiger)
+        // Append AATSDescriptors
         for (const auto &val : AATSDescriptors) {
             autocorrDescriptors.push_back(val);
         }
 
-        // Append ATSCDescriptors (108 values, includes Gasteiger at t=11)
-        size_t atsc_start = autocorrDescriptors.size();
+        // Append ATSCDescriptors
         for (const auto &val : ATSCDescriptors) {
             autocorrDescriptors.push_back(val);
         }
-        // Set NaN for Gasteiger-related descriptors (t=11, indices 99-107)
-        if (!gasteiger_ok) {
-            for (size_t i = 99; i < 108; ++i) {
-                autocorrDescriptors[atsc_start + i] = std::numeric_limits<double>::quiet_NaN();
-            }
-        }
 
-        // Append AATSCDescriptors (108 values, includes Gasteiger at t=11)
-        size_t aatsc_start = autocorrDescriptors.size();
+        // Append AATSCDescriptors
         for (const auto &val : AATSCDescriptors) {
             autocorrDescriptors.push_back(val);
         }
-        // Set NaN for Gasteiger-related descriptors (t=11, indices 99-107)
-        if (!gasteiger_ok) {
-            for (size_t i = 99; i < 108; ++i) {
-                autocorrDescriptors[aatsc_start + i] = std::numeric_limits<double>::quiet_NaN();
-            }
-        }
 
-        // Append MATSDescriptors (96 values, includes Gasteiger at t=11)
-        size_t mats_start = autocorrDescriptors.size();
+        // Append MATSDescriptors
         for (const auto &val : MATSDescriptors) {
             autocorrDescriptors.push_back(val);
         }
-        // Set NaN for Gasteiger-related descriptors (t=11, indices 88-95)
-        if (!gasteiger_ok) {
-            for (size_t i = 88; i < 96; ++i) {
-                autocorrDescriptors[mats_start + i] = std::numeric_limits<double>::quiet_NaN();
-            }
-        }
 
-        // Append GATSDescriptors (96 values, includes Gasteiger at t=11)
-        size_t gats_start = autocorrDescriptors.size();
+        // Append GATSDescriptors
         for (const auto &val : GATSDescriptors) {
             autocorrDescriptors.push_back(val);
-        }
-        // Set NaN for Gasteiger-related descriptors (t=11, indices 88-95)
-        if (!gasteiger_ok) {
-            for (size_t i = 88; i < 96; ++i) {
-                autocorrDescriptors[gats_start + i] = std::numeric_limits<double>::quiet_NaN();
-            }
         }
 
         return autocorrDescriptors;
@@ -8363,7 +8068,7 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
 
     // Function to compute the ATS descriptors without Eigen
     std::vector<double> calcAutoCorrelation(const RDKit::ROMol &mol) {
-        // Check Gasteiger parameters first (on original mol, before adding H)
+        // v2.0: Check Gasteiger parameters first (on original mol, before adding H)
         bool gasteiger_ok = checkGasteigerParameters(mol);
         
         std::unique_ptr<RDKit::ROMol> hmol(RDKit::MolOps::addHs(mol));
@@ -8381,8 +8086,8 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
         // Property matrix as a vector of vectors
         std::vector<std::vector<double>> propertyMatrix(numProperties, std::vector<double>(numAtoms, 0.0)); // correct
 
-        // Compute Gasteiger charges only if parameters are OK
-        std::vector<double> gasteigerCharges(numAtoms, 1.0); // Default to 1.0 if Gasteiger fails
+        // v2.0: Compute Gasteiger charges only if parameters exist
+        std::vector<double> gasteigerCharges(numAtoms, 0.0);
         if (gasteiger_ok) {
             try {
                 computeGasteigerCharges(*hmol, 12, true);
@@ -8395,14 +8100,14 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
                     gasteigerCharges[i] = charge;
                 }
             } catch (...) {
-                gasteiger_ok = false; // Mark as failed
+                // Gasteiger failed - charges stay at 0.0
             }
         }
 
         for (unsigned int i = 0; i < numAtoms; ++i) {
             const auto *atom = hmol->getAtomWithIdx(i);
             int atomNumber = atom->getAtomicNum();
-            propertyMatrix[0][i] = gasteigerCharges[i]; // Gasteiger charge (index 0)
+            propertyMatrix[0][i] = gasteigerCharges[i]; // not for ATS & AATS output
             propertyMatrix[1][i] = getValenceElectrons(*atom);
             propertyMatrix[2][i] = getSigmaElectrons(*atom);
             propertyMatrix[3][i] = getIntrinsicState(*atom);
@@ -8503,7 +8208,6 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
 
 
         // Flatten the descriptors into a single vector
-        // ATS_ and AATS_ (no Gasteiger, t=1 to 11)
         for (const auto& vec : {ATS_, AATS_}) {
             for (unsigned int t = 0; t < numProperties-1; ++t) {
                 for (unsigned int k = 0; k <= maxDistance; ++k) {
@@ -8512,8 +8216,8 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
             }
         }
 
-        // ATSC and AATSC (includes Gasteiger at t=0)
-        size_t atsc_start = descriptors.size();
+
+        // Flatten the descriptors into a single vector
         for (const auto& vec : { ATSC, AATSC}) {
             for (unsigned int t = 0; t < numProperties; ++t) {
                 for (unsigned int k = 0; k <= maxDistance; ++k) {
@@ -8521,20 +8225,8 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
                 }
             }
         }
-        // Set NaN for Gasteiger-related descriptors (t=0, k=0 to 8)
-        if (!gasteiger_ok) {
-            // ATSC: indices 0-8 (9 values)
-            for (size_t i = 0; i < 9; ++i) {
-                descriptors[atsc_start + i] = std::numeric_limits<double>::quiet_NaN();
-            }
-            // AATSC: indices 108-116 (9 values)
-            for (size_t i = 108; i < 117; ++i) {
-                descriptors[atsc_start + i] = std::numeric_limits<double>::quiet_NaN();
-            }
-        }
 
-        // MATS and GATS (includes Gasteiger at t=0, k=1 to 8)
-        size_t mats_start = descriptors.size();
+        // Flatten the descriptors into a single vector
         for (const auto& vec : { MATS, GATS}) {
             for (unsigned int t = 0; t < numProperties; ++t) {
                 for (unsigned int k = 1; k <= maxDistance; ++k) {
@@ -8542,17 +8234,7 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
                 }
             }
         }
-        // Set NaN for Gasteiger-related descriptors (t=0, k=1 to 8)
-        if (!gasteiger_ok) {
-            // MATS: indices 0-7 (8 values)
-            for (size_t i = 0; i < 8; ++i) {
-                descriptors[mats_start + i] = std::numeric_limits<double>::quiet_NaN();
-            }
-            // GATS: indices 96-103 (8 values)
-            for (size_t i = 96; i < 104; ++i) {
-                descriptors[mats_start + i] = std::numeric_limits<double>::quiet_NaN();
-            }
-        }
+
 
         return descriptors;
     }
@@ -8929,7 +8611,7 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
                     maxBES[posidx] = std::max(maxBES[posidx], maxBES_i[i]);
                 }
                 else {
-                    std::cout << "Out-of-bounds access detected for posIdx: " << posidx << " : " << sumsBES.size() << "\n";
+                    std::cerr << "Out-of-bounds access detected for posIdx: " << posidx << " : " << sumsBES.size() << "\n";
 
                 }
 
@@ -8984,7 +8666,7 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
         "[CX4H3]","[CX4H2]","[CX4H1]","[CX4H0]","*=[CX3H2]","[$(*=[CX3H1]),$([cX3H1](a)a)]","[$(*=[CX3H0]),$([cX3H0](a)(a)A)]","c(a)(a)a","*#C","[C][NX3;H2]","[c][NX3;H2]","[C][NX3;H1][C]",
         "[c][NX3;H1]","[c][nX3;H1][c]","[C][NX3;H0](C)[C]","[c][NX3;H0](C)[C]","[c][nX3;H0][c]","*=[Nv3;!R]","*=[Nv3;R]","[nX2H0,nX3H1+](a)a","N#C[A;!#1]","N#C[a;!#1]",
         "[$([A;!#1][NX3](=O)=O),$([A;!#1][NX3+](=O)[O-])]","[$([a;!#1][NX3](=O)=O),$([a;!#1][NX3+](=O)[O-])]","[$([NX3](=[OX1])(=[OX1])O),$([NX3+]([OX1-])(=[OX1])O)]","[OH]","[OX2;H0;!R]",
-        "[OX2;H0;R]","[oX2](a)a","*=O","[SX2](*)*","[sX2](a)a","*=[SX1]","[SX3]","[$([#16X4](=[OX1])(=[OX1])([!#8])[OX2H0]),$([#16X4+2]([OX1-])([OX1-])([!#8])[OX2H0])]","[S,s]","[P,p]",
+        "[OX2;H0;R]","[oX2](a)a","*=O","[SX2](*)*","[sX2](a)a","*=[SX1]","*=[SX3]","[$([#16X4](=[OX1])(=[OX1])([!#8])[OX2H0]),$([#16X4+2]([OX1-])([OX1-])([!#8])[OX2H0])]","[S,s]","[P,p]",
         "FA","Fa","Cl","Br","I","[CX3;!R](=[OX1])[OX2H0]","[CX3;R](=[OX1])[OX2H0;R]","P(=[OX1])(O)(O)O","[CX3](=[OX1])([OX2H0])[OX2H0]","[CX3](=O)[OX1H0-,OX2H1]","nC=[OX1]","[N;!R]C=[OX1]",
         "[N;R][C;R]=[OX1]","[$([SX4](=[OX1])(=[OX1])([!O])[NX3]),$([SX4+2]([OX1-])([OX1-])([!O])[NX3])]","NC(=[OX1])N","[NX3,NX4+][CX3](=[OX1])[OX2,OX1-]","[CX3](=[OX1])[NX3][CX3](=[OX1])",
         "C1(=[OX1])C=CC(=[OX1])C=C1","[$([CX4]([F,Cl,Br,I,$([NX3](=O)=O),$([NX3+](=O)[O-]),$(C#N),$([CX4](F)(F)F)])[F,Cl,Br,I,$([NX3](=O)=O),$([NX3+](=O)[O-]),$(C#N),$([CX4](F)(F)F)])]",
@@ -8996,7 +8678,7 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
 
 
     // Precompile SMARTS patterns for efficiency
-const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesA() {
+    static const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesA() {
       static const std::vector<std::shared_ptr<RDKit::RWMol>> queriesA = [] {
         std::vector<std::shared_ptr<RDKit::RWMol>> res;
         for (const auto &smi : AFragments) {
@@ -9004,7 +8686,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesA() {
           if (mol) {
             res.emplace_back(std::move(mol));
           } else {
-            std::cout << "Invalid SMARTS: " << smi << std::endl;
+            std::cerr << "Invalid SMARTS: " << smi << std::endl;
           }
         }
         return res;
@@ -9012,7 +8694,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesA() {
       return queriesA;
     }
 
-const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
+    static const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
       static const std::vector<std::shared_ptr<RDKit::RWMol>> queriesB = [] {
         std::vector<std::shared_ptr<RDKit::RWMol>> res;
         for (const auto &smi : BSELFragments) {
@@ -9020,7 +8702,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
           if (mol) {
             res.emplace_back(std::move(mol));
           } else {
-            std::cout << "Invalid SMARTS: " << smi << std::endl;
+            std::cerr << "Invalid SMARTS: " << smi << std::endl;
           }
         }
         return res;
@@ -9057,7 +8739,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
         0.057,0.495,1.258,0.848,0.954,2.196,0.,0.554,2.051,-0.143,-0.147,0.669,1.097,1.590,-0.39,0.406,-0.483,0.,-0.369,0.,0.603,0.583,0.,0.,0.,0.,0.,-0.111,
         0.054,0.488,-0.072,-0.337,0.,-0.303,-0.364,0.062,0.,0.169,-0.4,0.1,-0.179,0.,0.042,0.209,-0.058,-0.081,-0.026,0.,0.,0.149,-0.145,0.,0.,0.13 };
 
-    // Platts, Butina, Abraham, Hersey, Estimation of Molecular Linear Free Energy Relation Descriptors Using a Group Contribution Approach J. Chem. Inf. Comput. Sci. 1999, 39, 835-845 
+
     std::vector<double> calcAbrahams(const RDKit::ROMol& mol) {
         std::vector<double> retval(6, 0.0);
 
@@ -9108,12 +8790,14 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
 
 
         } catch (const std::exception& e) {
-            std::cout << "Error in SMARTS matching: " << e.what() << std::endl;
+            std::cerr << "Error in SMARTS matching: " << e.what() << std::endl;
             throw std::runtime_error("Error in SMARTSQueryTool");
         }
 
         return retval;
     }
+
+
 
     //// IC based on the Roy, Basak, Harriss, Magnuson paper Neighorhoo complexities and symmetry of chemical graphs and their biological applications
     // in this algorithm we use the cluster list to iterate per radius not the whole atoms accross clusters.
@@ -9203,7 +8887,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
         int nAtoms = rdcast<int>(mol.getNumAtoms());
 
         if (nAtoms == 0) {
-            std::cout << "Error: Molecule has no atoms." << std::endl;
+            std::cerr << "Error: Molecule has no atoms." << std::endl;
             return {};
         }
 
@@ -9213,7 +8897,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
 
 
         if (debug) {
-            std::cout << "Debugging enabled for molecule: " << smi << "n & NumAtoms: " << nAtoms << std::endl;
+            std::cerr << "Debugging enabled for molecule: " << smi << "n & NumAtoms: " << nAtoms << std::endl;
         }
 
         auto [M, SP] = initializeMatrixAndSP(nAtoms, maxRadius);
@@ -9221,20 +8905,20 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
 
 
         if (debug) {
-            std::cout << "Initial M matrix:\n";
+            std::cerr << "Initial M matrix:\n";
             for (const auto& row : M) {
                 for (int val : row) {
-                    std::cout << val << " ";
+                    std::cerr << val << " ";
                 }
-                std::cout << "\n";
+                std::cerr << "\n";
             }
 
-            std::cout << "Initial SP matrix:\n";
+            std::cerr << "Initial SP matrix:\n";
             for (const auto& row : SP) {
                 for (int val : row) {
-                    std::cout << val << " ";
+                    std::cerr << val << " ";
                 }
-                std::cout << "\n";
+                std::cerr << "\n";
             }
         }
 
@@ -9258,7 +8942,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
             CN[0][0].push_back(static_cast<int>(cluster.size()));  // Cluster size
             int atomIdx = cluster.back();
             if (atomIdx < 0 || atomIdx >= nAtoms) {
-                std::cout << "Error: Invalid atom index: " << atomIdx << std::endl;
+                std::cerr << "Error: Invalid atom index: " << atomIdx << std::endl;
                 continue;
             }
             CN[0][1].push_back(mol.getAtomWithIdx(atomIdx)->getAtomicNum());   // Last atomic number
@@ -9267,20 +8951,20 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
         }
 
         if (debug) {
-            std::cout << "\nM matrix before radius 1:\n";
+            std::cerr << "\nM matrix before radius 1:\n";
             for (const auto& row : M) {
                 for (int val : row) {
-                    std::cout << val << " ";
+                    std::cerr << val << " ";
                 }
-                std::cout << "\n";
+                std::cerr << "\n";
             }
 
-            std::cout << "\nSP matrix before radius 1:\n";
+            std::cerr << "\nSP matrix before radius 1:\n";
             for (const auto& row : SP) {
                 for (int val : row) {
-                    std::cout << val << " ";
+                    std::cerr << val << " ";
                 }
-                std::cout << "\n";
+                std::cerr << "\n";
             }
         }
 
@@ -9310,7 +8994,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
                     std::vector<int> neighbors;
 
                     if (debug) {
-                        std::cout << "Radius " << r << ", Atom " << atomIdx << " .Symbol: " << mol.getAtomWithIdx(atomIdx)->getSymbol()
+                        std::cerr << "Radius " << r << ", Atom " << atomIdx << " .Symbol: " << mol.getAtomWithIdx(atomIdx)->getSymbol()
                                << ", Start " << start << ", Stop " << stop << std::endl;
                     }
 
@@ -9379,20 +9063,20 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
             clusters = newClusters;
 
             if (debug) {
-                std::cout << "M Matrix after radius " << r << ":\n";
+                std::cerr << "M Matrix after radius " << r << ":\n";
                 for (const auto& row : M) {
                     for (int val : row) {
-                        std::cout << val << " ";
+                        std::cerr << val << " ";
                     }
-                    std::cout << std::endl;
+                    std::cerr << std::endl;
                 }
 
-                std::cout << "SP Matrix after radius " << r << ":\n";
+                std::cerr << "SP Matrix after radius " << r << ":\n";
                 for (const auto& row : SP) {
                     for (int val : row) {
-                        std::cout << val << " ";
+                        std::cerr << val << " ";
                     }
-                    std::cout << std::endl;
+                    std::cerr << std::endl;
                 }
             }
 
@@ -9418,7 +9102,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
                 std::all_of(clusters.begin(), clusters.end(), [](auto& c) { return c.size() == 1; })) {
 
                 if (debug) {
-                        std::cout << "Stopping expansion at radius " << r
+                        std::cerr << "Stopping expansion at radius " << r
                                 << " - Reason: "
                                 << (stopExpansion ? "No new neighbors" : "All clusters are singletons")
                                 << std::endl;
@@ -9439,13 +9123,13 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
         }
 
         if (debug) {
-            std::cout << "Final CN values for " << smi << ":\n";
+            std::cerr << "Final CN values for " << smi << ":\n";
             for (const auto& [r, values] : CN) {
-                std::cout << "Radius " << r << ": ";
+                std::cerr << "Radius " << r << ": ";
                 for (const auto& val : values[0]) {
-                    std::cout << val << " ";
+                    std::cerr << val << " ";
                 }
-                std::cout << std::endl;
+                std::cerr << std::endl;
             }
         }
 
@@ -9509,7 +9193,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
         int nAtoms = hmol->getNumAtoms();
 
         if (nAtoms == 0) {
-            std::cout << "Error: Molecule has no atoms after adding hydrogens." << std::endl;
+            std::cerr << "Error: Molecule has no atoms after adding hydrogens." << std::endl;
             return {};
         }
 
@@ -9525,7 +9209,7 @@ const std::vector<std::shared_ptr<RDKit::RWMol>> &GetQueriesB() {
         auto CN = computePipeline(*hmol, maxradius);
 
         if (CN.empty()) {
-            std::cout << "Error: ComputePipeline returned empty CN." << std::endl;
+            std::cerr << "Error: ComputePipeline returned empty CN." << std::endl;
             return {};
         }
 
@@ -9547,7 +9231,7 @@ std::vector<double> calcInformationContent_(const RDKit::ROMol& mol) {
 
         int nAtoms = hmol->getNumAtoms();
         if (nAtoms == 0) {
-            std::cout << "Error: Molecule has no atoms after adding hydrogens." << std::endl;
+            std::cerr << "Error: Molecule has no atoms after adding hydrogens." << std::endl;
             delete hmol; // Clean up memory
             return {};
         }
@@ -9562,7 +9246,7 @@ std::vector<double> calcInformationContent_(const RDKit::ROMol& mol) {
 
         auto CN = computePipeline(*hmol, maxradius);
         if (CN.empty()) {
-            std::cout << "Error: ComputePipeline returned empty CN." << std::endl;
+            std::cerr << "Error: ComputePipeline returned empty CN." << std::endl;
             delete hmol; // Clean up memory
             return {};
         }
@@ -9574,7 +9258,7 @@ std::vector<double> calcInformationContent_(const RDKit::ROMol& mol) {
         return icvalues;
 
     } catch (const std::exception& e) {
-        std::cout << "Error: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << std::endl;
         delete hmol; // Clean up memory
         return {};
     }
@@ -9585,22 +9269,14 @@ std::vector<double> calcInformationContent_(const RDKit::ROMol& mol) {
 std::vector<double> TIn(const RDKit::ROMol &mol, const std::vector<double> b) {
     double ti1 = std::accumulate(b.begin(), b.end(), 0.0);
     double ti2 = std::accumulate(b.begin(), b.end(), 0.0, [](double acc, double yi) { return acc + yi * yi; });
-    // ti3: Use abs() to preserve magnitude information (1987 paper documents negatives as valid)
-    // This preserves graph invariant knowledge while making sqrt mathematically valid
-    double ti3 = std::accumulate(b.begin(), b.end(), 0.0, [](double acc, double yi) { return acc + std::sqrt(std::abs(yi)); });
+    double ti3 = std::accumulate(b.begin(), b.end(), 0.0, [](double acc, double yi) { return acc + std::sqrt(yi); });
 
-    // ti4: Use abs() to preserve magnitude of interactions (allows all bonds to contribute)
-    // This preserves graph invariant knowledge while making power operation valid
     double ti4 = 0;
     for (unsigned int i = 0; i < b.size(); ++i) {
         for (unsigned int j = 0; j < i; ++j) {
             const auto* bond = mol.getBondBetweenAtoms(i, j);
             if (bond != nullptr) {
-                double product = b[i] * b[j];
-                double abs_product = std::abs(product);
-                if (abs_product > 1e-10) {  // Avoid division by zero
-                    ti4 += std::pow(abs_product, -0.5);
-                }
+                ti4 += std::pow(b[i] * b[j], -0.5);
             }
         }
     }
@@ -9622,57 +9298,25 @@ std::vector<double> TIn(const RDKit::ROMol &mol, const std::vector<double> b, in
 
         double ti1 = std::accumulate(bi.begin(), bi.end(), 0.0);
         double ti2 = std::accumulate(bi.begin(), bi.end(), 0.0, [](double acc, double yi) { return acc + yi * yi; });
-        // ti3: Use abs() to preserve magnitude information (1987 paper documents negatives as valid)
-        // This preserves graph invariant knowledge while making sqrt mathematically valid
-        double ti3 = std::accumulate(bi.begin(), bi.end(), 0.0, [](double acc, double yi) { return acc + std::sqrt(std::abs(yi)); });
+        double ti3 = std::accumulate(bi.begin(), bi.end(), 0.0, [](double acc, double yi) { return acc + std::sqrt(yi); });
 
-        // ti4: Use abs() to preserve magnitude of interactions (allows all bonds to contribute)
-        // This preserves graph invariant knowledge while making power operation valid
         double ti4 = 0;
-        for (int idx = 0; idx < n; ++idx) {
-            for (int jdx = 0; jdx < idx; ++jdx) {
-                const auto* bond = mol.getBondBetweenAtoms(idx, jdx);
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < i; ++j) {
+                const auto* bond = mol.getBondBetweenAtoms(i, j);
                 if (bond != nullptr) {
-                    double product = bi[idx] * bi[jdx];
-                    double abs_product = std::abs(product);
-                    if (abs_product > 1e-10) {  // Avoid division by zero
-                        double contrib = std::pow(abs_product, -0.5);
-                        ti4 += contrib;
-                    }
+                    ti4 += std::pow(bi[i] * bi[j], -0.5);
                 }
             }
         }
 
-        // ti5: geometric mean - handle zeros and negatives
-        double ti5;
-        // Check if any zeros or negatives
-        bool has_non_positive = std::any_of(bi.begin(), bi.end(), [](double x) { return x <= 0.0; });
-        if (has_non_positive) {
-            // If zeros/negatives exist, only use positive values for geometric mean
-            std::vector<double> bi_positive;
-            for (double val : bi) {
-                if (val > 0.0) {
-                    bi_positive.push_back(val);
-                }
-            }
-            if (bi_positive.size() > 0 && std::accumulate(bi_positive.begin(), bi_positive.end(), 1.0, std::multiplies<double>()) > 0.0) {
-                double product = std::accumulate(bi_positive.begin(), bi_positive.end(), 1.0, std::multiplies<double>());
-                double exp = 1.0 / n;
-                ti5 = n * std::pow(product, exp);
-            } else {
-                ti5 = 0.0;
-            }
-        } else {
-            double product = std::accumulate(bi.begin(), bi.end(), 1.0, std::multiplies<double>());
-            double exp = 1.0 / n;
-            ti5 = n * std::pow(product, exp);
-        }
-        
+        double ti5 = n * std::pow(std::accumulate(bi.begin(), bi.end(), 1.0, std::multiplies<double>()), 1.0 / n);
         res[i*5 + 0] = ti1;
         res[i*5 + 1] = ti2;
         res[i*5 + 2] = ti3;
         res[i*5 + 3] = ti4;
         res[i*5 + 4] = ti5;
+
     }
     return res;
 }
@@ -9730,30 +9374,9 @@ std::vector<double> calcANMat(const RDKit::ROMol &mol) {
 
     solveLinearSystem(mol, A_flat, B, n, nrhs, success);
 
-    if (!success) {
-        // FIXED: Return correct number of zeros (nrhs * 5), not just 5!
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        return zeros;
-    }
-    
-    auto result = TIn(mol,B,nrhs );
-    
-    // CRITICAL CHECK: Verify result size matches expected (nrhs * 5)
-    if (result.size() != static_cast<size_t>(nrhs * 5)) {
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        std::cerr << "ERROR: calcANMat result size mismatch! Expected " << (nrhs * 5) 
-                  << ", got " << result.size() << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        return zeros;
-    }
-    
-    // CRITICAL CHECK: Verify no NaN in result
-    bool has_nan = std::any_of(result.begin(), result.end(), [](double x) { return std::isnan(x) || std::isinf(x); });
-    if (has_nan) {
-        std::cerr << "ERROR: calcANMat returned NaN/Inf! result size=" << result.size() 
-                  << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-    }
-    
-    return result;
+    if (!success) {return {0.,0.,0.,0.,0.};}
+
+    return TIn(mol,B,nrhs );
 }
 
 
@@ -9806,36 +9429,16 @@ std::vector<double> calcAZMat(const RDKit::ROMol &mol) {
 
     solveLinearSystem(mol, A_flat, B, n, nrhs, success);
 
-    if (!success) {
-        // FIXED: Return correct number of zeros (nrhs * 5), not just 5!
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        return zeros;
-    }
-    
-    auto result = TIn(mol,B,nrhs );
-    
-    // CRITICAL CHECK: Verify result size matches expected (nrhs * 5)
-    if (result.size() != static_cast<size_t>(nrhs * 5)) {
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        std::cerr << "ERROR: calcAZMat result size mismatch! Expected " << (nrhs * 5) 
-                  << ", got " << result.size() << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        return zeros;
-    }
-    
-    // CRITICAL CHECK: Verify no NaN in result
-    bool has_nan = std::any_of(result.begin(), result.end(), [](double x) { return std::isnan(x) || std::isinf(x); });
-    if (has_nan) {
-        std::cerr << "ERROR: calcAZMat returned NaN/Inf! result size=" << result.size() 
-                  << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-    }
-    
-    return result;
+    if (!success) {return {0.,0.,0.,0.,0.};}
+
+    return TIn(mol,B,nrhs );
 }
 
 
 
 // triplet AS*x = V: N,V,Z,I
 std::vector<double> calcASMat(const RDKit::ROMol &mol) {
+
     int nAtoms = rdcast<int>(mol.getNumAtoms());
 
     std::vector<double> adjMatVec(nAtoms * nAtoms, 0.0); // A
@@ -9881,37 +9484,16 @@ std::vector<double> calcASMat(const RDKit::ROMol &mol) {
 
     solveLinearSystem(mol, A_flat, B, n, nrhs, success);
 
-    if (!success) {
-        // FIXED: Return correct number of zeros (nrhs * 5), not just 5!
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        return zeros;
-    }
-    
-    auto result = TIn(mol,B,nrhs );
-    
-    // CRITICAL CHECK: Verify result size matches expected (nrhs * 5)
-    if (result.size() != static_cast<size_t>(nrhs * 5)) {
-        // This would cause memory corruption - return zeros instead
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        std::cerr << "ERROR: calcDSMat result size mismatch! Expected " << (nrhs * 5) 
-                  << ", got " << result.size() << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        return zeros;
-    }
-    
-    // CRITICAL CHECK: Verify no NaN in result
-    bool has_nan = std::any_of(result.begin(), result.end(), [](double x) { return std::isnan(x) || std::isinf(x); });
-    if (has_nan) {
-        std::cerr << "ERROR: calcDSMat returned NaN/Inf! result size=" << result.size() 
-                  << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-    }
-    
-    return result;
+    if (!success) {return {0.,0.,0.,0.,0.};}
+
+    return TIn(mol,B,nrhs );
 }
 
 
 
 // triplet DS*x = V: V,I,N,Z
 std::vector<double> calcDSMat(const RDKit::ROMol &mol) {
+
     int nAtoms = rdcast<int>(mol.getNumAtoms());
 
     std::vector<double> DistMatVec(nAtoms * nAtoms, 0.0); // "D"
@@ -9955,31 +9537,9 @@ std::vector<double> calcDSMat(const RDKit::ROMol &mol) {
 
     solveLinearSystem(mol, A_flat, B, n, nrhs, success);
 
-    if (!success) {
-        // FIXED: Return correct number of zeros (nrhs * 5), not just 5!
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        return zeros;
-    }
-    
-    auto result = TIn(mol,B,nrhs );
-    
-    // CRITICAL CHECK: Verify result size matches expected (nrhs * 5)
-    if (result.size() != static_cast<size_t>(nrhs * 5)) {
-        // This would cause memory corruption - return zeros instead
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        std::cerr << "ERROR: calcASMat result size mismatch! Expected " << (nrhs * 5) 
-                  << ", got " << result.size() << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-        return zeros;
-    }
-    
-    // CRITICAL CHECK: Verify no NaN in result
-    bool has_nan = std::any_of(result.begin(), result.end(), [](double x) { return std::isnan(x) || std::isinf(x); });
-    if (has_nan) {
-        std::cerr << "ERROR: calcASMat returned NaN/Inf! result size=" << result.size() 
-                  << ", Smiles:" << RDKit::MolToSmiles(mol) << "\n";
-    }
-    
-    return result;
+    if (!success) {return {0.,0.,0.,0.,0.};}
+
+    return TIn(mol,B,nrhs );
 }
 
 
@@ -10031,11 +9591,7 @@ std::vector<double> calcDN2Mat(const RDKit::ROMol &mol) {
 
     solveLinearSystem(mol, A_flat, B, n, nrhs, success);
 
-    if (!success) {
-        // FIXED: Return correct number of zeros (nrhs * 5), not just 5!
-        std::vector<double> zeros(nrhs * 5, 0.0);
-        return zeros;
-    }
+    if (!success) {return {0.,0.,0.,0.,0.};}
 
     return TIn(mol,B,nrhs );
 }
@@ -10852,7 +10408,7 @@ std::vector<double> calcDN2Z(const RDKit::ROMol &mol) {
         "[c][NX3;H1]","[c][nX3;H1][c]","[C][NX3;H0](C)[C]","[c][NX3;H0](C)[C]","[c][nX3;H0][c]","*=[Nv3;!R]","*=[Nv3;R]",
         "[nX2H0,nX3H1+](a)a","N#C[A;!#1]","N#C[a;!#1]","[$([A;!#1][NX3](=O)=O),$([A;!#1][NX3+](=O)[O-])]",
         "[$([a;!#1][NX3](=O)=O),$([a;!#1][NX3+](=O)[O-])]","[$([NX3](=[OX1])(=[OX1])O),$([NX3+]([OX1-])(=[OX1])O)]","[OH]","[OX2;H0;!R]","[OX2;H0;R]","[oX2](a)a",
-        "*=O","[SX2](*)*","[sX2](a)a","*=[SX1]","[SX3]","[$([#16X4](=[OX1])(=[OX1])([!#8])[OX2H0]),$([#16X4+2]([OX1-])([OX1-])([!#8])[OX2H0])]","[S,s]",
+        "*=O","[SX2](*)*","[sX2](a)a","*=[SX1]","*=[SX3]","[$([#16X4](=[OX1])(=[OX1])([!#8])[OX2H0]),$([#16X4+2]([OX1-])([OX1-])([!#8])[OX2H0])]","[S,s]",
         "[P,p]","FA","Fa","Cl","Br","I","[CX3;!R](=[OX1])[OX2H0]","[CX3;R](=[OX1])[OX2H0;R]","P(=[OX1])(O)(O)O","[CX3](=[OX1])([OX2H0])[OX2H0]","[CX3](=O)[OX1H0-,OX2H1]",
         "nC=[OX1]","[N;!R]C=[OX1]","[N;R][C;R]=[OX1]","[$([SX4](=[OX1])(=[OX1])([!O])[NX3]),$([SX4+2]([OX1-])([OX1-])([!O])[NX3])]","NC(=[OX1])N","[NX3,NX4+][CX3](=[OX1])[OX2,OX1-]","[CX3](=[OX1])[NX3][CX3](=[OX1])",
         "C1(=[OX1])C=CC(=[OX1])C=C1","[$([CX4]([F,Cl,Br,I,$([NX3](=O)=O),$([NX3+](=O)[O-]),$(C#N),$([CX4](F)(F)F)])[F,Cl,Br,I,$([NX3](=O)=O),$([NX3+](=O)[O-]),$(C#N),$([CX4](F)(F)F)])]",
@@ -10899,7 +10455,7 @@ std::vector<double> calcDN2Z(const RDKit::ROMol &mol) {
               if (mol) {
                 res.emplace_back(std::move(mol));
               } else {
-                std::cout << "Invalid SMARTS: " << smi << std::endl;
+                std::cerr << "Invalid SMARTS: " << smi << std::endl;
               }
             }
             return res;
@@ -10923,7 +10479,7 @@ std::vector<double> calcDN2Z(const RDKit::ROMol &mol) {
 
 
         } catch (const std::exception& e) {
-            std::cout << "Error in SMARTS matching: " << e.what() << std::endl;
+            std::cerr << "Error in SMARTS matching: " << e.what() << std::endl;
             throw std::runtime_error("Error in SMARTSQueryTool");
         }
 
@@ -11032,9 +10588,6 @@ std::vector<double> calcInformationContent(const RDKit::ROMol& mol, int maxradiu
 // Aggregated fast path that calls all Osmordred descriptors in C++
 std::vector<double> calcOsmordred(const RDKit::ROMol& mol) { return std::vector<double>(); }
   
-// Include Abraham V2 integration code
-#include "abraham_v2_integration.cpp"
-
 #endif
 } // end namespae descriptors
 } // end namespace osmordred
