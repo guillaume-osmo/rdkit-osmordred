@@ -5,6 +5,27 @@ if(RDK_BUILD_DESCRIPTORS3D)
 
 endif(RDK_BUILD_DESCRIPTORS3D)
 
+# Osmordred, RDKit217, and SMARTS291 descriptors
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  find_package(LAPACK REQUIRED)
+  include_directories(${LAPACK_INCLUDE_DIRS})
+  
+  # Include rdkit217 folder for RDKit217 descriptors
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/rdkit217)
+  
+  # Include smarts291 folder for Abraham SMARTS-based features
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/smarts291)
+  
+  set(OSMORDRED_HDRS Osmordred.h)
+  set(OSMORDRED_SOURCES Osmordred.cpp)
+  
+  set(RDKIT217_HDRS rdkit217/RDKit217Descriptors.h)
+  set(RDKIT217_SOURCES rdkit217/RDKit217Descriptors.cpp)
+  
+  set(SMARTS291_HDRS smarts291/SMARTS291.h smarts291/abraham_queries.h)
+  set(SMARTS291_SOURCES smarts291/abraham_integration.cpp smarts291/abraham_queries.cpp)
+endif(RDK_BUILD_OSMORDRED_SUPPORT)
+
 
 rdkit_library(Descriptors
               Crippen.cpp BCUT.cpp MolDescriptors.cpp MolSurf.cpp Lipinski.cpp ConnectivityDescriptors.cpp
@@ -15,9 +36,17 @@ rdkit_library(Descriptors
               OxidationNumbers.cpp
               DCLV.cpp
               ${DESC3D_SOURCES}
+              ${OSMORDRED_SOURCES}
+              ${RDKIT217_SOURCES}
+              ${SMARTS291_SOURCES}
               LINK_LIBRARIES PartialCharges SmilesParse FileParsers Subgraphs SubstructMatch MolTransforms GraphMol
-                 EigenSolvers RDGeneral)
+                 EigenSolvers RDGeneral Fingerprints)
 target_compile_definitions(Descriptors PRIVATE RDKIT_DESCRIPTORS_BUILD)
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  target_compile_definitions(Descriptors PRIVATE RDK_BUILD_OSMORDRED_SUPPORT)
+  find_library(LAPACKE_LIB lapacke HINTS ${CMAKE_PREFIX_PATH}/lib)
+  target_link_libraries(Descriptors PUBLIC ${LAPACK_LIBRARIES} ${LAPACKE_LIB})
+endif()
 
 rdkit_headers(Crippen.h BCUT.h Lipinski.h
               MolDescriptors.h
@@ -30,6 +59,9 @@ rdkit_headers(Crippen.h BCUT.h Lipinski.h
               OxidationNumbers.h
               DCLV.h
               ${DESC3D_HDRS}
+              ${OSMORDRED_HDRS}
+              ${RDKIT217_HDRS}
+              ${SMARTS291_HDRS}
               DEST GraphMol/Descriptors)
 
 rdkit_test(testDescriptors test.cpp
@@ -70,6 +102,12 @@ LINK_LIBRARIES  Descriptors ForceFieldHelpers DistGeomHelpers  )
 endif(RDK_BUILD_DESCRIPTORS3D)
 
 rdkit_catch_test(descriptorsTestCatch catch_tests.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+
+if(RDK_BUILD_OSMORDRED_SUPPORT)
+  rdkit_catch_test(testOsmordred test_osmordred.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+  rdkit_catch_test(testRDKit217 rdkit217/test_rdkit217.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+  rdkit_catch_test(testSMARTS291 smarts291/test_smarts291.cpp LINK_LIBRARIES Descriptors SmilesParse FileParsers)
+endif(RDK_BUILD_OSMORDRED_SUPPORT)
 
 if(RDK_BUILD_PYTHON_WRAPPERS)
 add_subdirectory(Wrap)
