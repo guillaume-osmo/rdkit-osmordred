@@ -14,6 +14,7 @@
 #include <sstream>
 #include <vector>
 #include <string>
+#include <map>
 #include <cmath>
 #include <iomanip>
 
@@ -30,61 +31,44 @@ TEST_CASE("RDKit217 Basic Functionality", "[rdkit217]") {
         REQUIRE(names.size() == 217);
     }
     
-    SECTION("Descriptor names match Python Descriptors.descList") {
-        // These are the 217 descriptor names from Python's Descriptors._descList
-        // Generated with: [d[0] for d in Descriptors._descList]
-        std::vector<std::string> python_names = {
-            "MaxAbsEStateIndex", "MaxEStateIndex", "MinAbsEStateIndex", "MinEStateIndex",
-            "qed", "SPS",
-            "MolWt", "HeavyAtomMolWt", "ExactMolWt",
-            "NumValenceElectrons", "NumRadicalElectrons",
-            "MaxPartialCharge", "MinPartialCharge", "MaxAbsPartialCharge", "MinAbsPartialCharge",
-            "FpDensityMorgan1", "FpDensityMorgan2", "FpDensityMorgan3",
-            "BCUT2D_MWHI", "BCUT2D_MWLOW", "BCUT2D_CHGHI", "BCUT2D_CHGLO",
-            "BCUT2D_LOGPHI", "BCUT2D_LOGPLOW", "BCUT2D_MRHI", "BCUT2D_MRLOW",
-            "AvgIpc", "BalabanJ", "BertzCT",
-            "Chi0", "Chi0n", "Chi0v", "Chi1", "Chi1n", "Chi1v",
-            "Chi2n", "Chi2v", "Chi3n", "Chi3v", "Chi4n", "Chi4v",
-            "HallKierAlpha", "Ipc", "Kappa1", "Kappa2", "Kappa3", "LabuteASA",
-            "PEOE_VSA1", "PEOE_VSA10", "PEOE_VSA11", "PEOE_VSA12", "PEOE_VSA13", "PEOE_VSA14",
-            "PEOE_VSA2", "PEOE_VSA3", "PEOE_VSA4", "PEOE_VSA5", "PEOE_VSA6", "PEOE_VSA7", "PEOE_VSA8", "PEOE_VSA9",
-            "SMR_VSA1", "SMR_VSA10", "SMR_VSA2", "SMR_VSA3", "SMR_VSA4", "SMR_VSA5",
-            "SMR_VSA6", "SMR_VSA7", "SMR_VSA8", "SMR_VSA9",
-            "SlogP_VSA1", "SlogP_VSA10", "SlogP_VSA11", "SlogP_VSA12",
-            "SlogP_VSA2", "SlogP_VSA3", "SlogP_VSA4", "SlogP_VSA5", "SlogP_VSA6", "SlogP_VSA7", "SlogP_VSA8", "SlogP_VSA9",
-            "TPSA",
-            "EState_VSA1", "EState_VSA10", "EState_VSA11", "EState_VSA2", "EState_VSA3", "EState_VSA4",
-            "EState_VSA5", "EState_VSA6", "EState_VSA7", "EState_VSA8", "EState_VSA9",
-            "VSA_EState1", "VSA_EState10", "VSA_EState2", "VSA_EState3", "VSA_EState4",
-            "VSA_EState5", "VSA_EState6", "VSA_EState7", "VSA_EState8", "VSA_EState9",
-            "FractionCSP3", "HeavyAtomCount",
-            "NHOHCount", "NOCount",
-            "NumAliphaticCarbocycles", "NumAliphaticHeterocycles", "NumAliphaticRings", "NumAmideBonds",
-            "NumAromaticCarbocycles", "NumAromaticHeterocycles", "NumAromaticRings",
-            "NumBridgeheadAtoms", "NumHAcceptors", "NumHDonors", "NumHeteroatoms", "NumHeterocycles",
-            "NumRotatableBonds", "NumSaturatedCarbocycles", "NumSaturatedHeterocycles", "NumSaturatedRings",
-            "NumSpiroAtoms", "RingCount",
-            "MolLogP", "MolMR",
-            "fr_Al_COO", "fr_Al_OH", "fr_Al_OH_noTert", "fr_ArN", "fr_Ar_COO", "fr_Ar_N", "fr_Ar_NH", "fr_Ar_OH",
-            "fr_COO", "fr_COO2", "fr_C_O", "fr_C_O_noCOO", "fr_C_S",
-            "fr_HOCCN", "fr_Imine", "fr_NH0", "fr_NH1", "fr_NH2", "fr_N_O",
-            "fr_Ndealkylation1", "fr_Ndealkylation2", "fr_Nhpyrrole", "fr_SH",
-            "fr_aldehyde", "fr_alkyl_carbamate", "fr_alkyl_halide", "fr_allylic_oxid",
-            "fr_amide", "fr_amidine", "fr_aniline", "fr_aryl_methyl", "fr_azide", "fr_azo",
-            "fr_barbitur", "fr_benzene", "fr_benzodiazepine", "fr_bicyclic",
-            "fr_diazo", "fr_dihydropyridine", "fr_epoxide", "fr_ester", "fr_ether",
-            "fr_furan", "fr_guanido", "fr_halogen", "fr_hdrzine", "fr_hdrzone",
-            "fr_imidazole", "fr_imide", "fr_isocyan", "fr_isothiocyan",
-            "fr_ketone", "fr_ketone_Topliss", "fr_lactam", "fr_lactone",
-            "fr_methoxy", "fr_morpholine", "fr_nitrile", "fr_nitro", "fr_nitro_arom", "fr_nitro_arom_nonortho",
-            "fr_nitroso", "fr_oxazole", "fr_oxime", "fr_para_hydroxylation",
-            "fr_phenol", "fr_phenol_noOrthoHbond", "fr_phos_acid", "fr_phos_ester",
-            "fr_piperdine", "fr_piperzine", "fr_priamide", "fr_prisulfonamd",
-            "fr_pyridine", "fr_quatN", "fr_sulfide", "fr_sulfonamd", "fr_sulfone",
-            "fr_term_acetylene", "fr_tetrazole", "fr_thiazole", "fr_thiocyan",
-            "fr_thiophene", "fr_unbrch_alkane", "fr_urea"
-        };
+    SECTION("Descriptor names match Python Descriptors.descList from golden file") {
+        // Read descriptor names from golden reference file header
+        // This is the source of truth from Python's Descriptors._descList
+        std::string rdbase = std::getenv("RDBASE") ? std::getenv("RDBASE") : "";
+        std::string golden_path;
         
+        if (!rdbase.empty()) {
+            golden_path = rdbase + "/Code/GraphMol/Descriptors/test_data/nci_100_rdkit217_golden.csv";
+        } else {
+            golden_path = "Code/GraphMol/Descriptors/test_data/nci_100_rdkit217_golden.csv";
+        }
+        
+        std::ifstream golden_file(golden_path);
+        if (!golden_file.is_open()) {
+            WARN("Golden reference not found: " << golden_path);
+            WARN("Skipping name validation test");
+            return;
+        }
+        
+        // Read header line containing Python descriptor names
+        std::string header;
+        std::getline(golden_file, header);
+        golden_file.close();
+        
+        // Parse header to extract Python names (skip first "smiles" column)
+        std::vector<std::string> python_names;
+        std::istringstream hss(header);
+        std::string col;
+        bool first = true;
+        while (std::getline(hss, col, ',')) {
+            if (first) {
+                first = false;  // Skip "smiles" column
+                continue;
+            }
+            python_names.push_back(col);
+        }
+        
+        INFO("Read " << python_names.size() << " descriptor names from golden file");
         REQUIRE(python_names.size() == 217);
         
         auto cpp_names = getRDKit217DescriptorNames();
@@ -100,19 +84,86 @@ TEST_CASE("RDKit217 Basic Functionality", "[rdkit217]") {
             }
         }
         
+        INFO("Total name mismatches: " << mismatches);
         REQUIRE(mismatches == 0);
     }
     
-    SECTION("Ethanol descriptors") {
+    SECTION("Ethanol descriptors - validate by name against native RDKit") {
         auto mol = SmilesToMol("CCO");
         REQUIRE(mol != nullptr);
         
         auto descs = extractRDKitDescriptors(*mol);
+        auto names = getRDKit217DescriptorNames();
         REQUIRE(descs.size() == 217);
+        REQUIRE(names.size() == 217);
         
-        // Check a few known values (from Python)
-        // MolWt (index 6) = 46.069
-        CHECK_THAT(descs[6], Catch::Matchers::WithinRel(46.069, 0.01));
+        // Build name->index map for lookup by descriptor name
+        std::map<std::string, size_t> name_to_idx;
+        for (size_t i = 0; i < names.size(); ++i) {
+            name_to_idx[names[i]] = i;
+        }
+        
+        // Validate specific descriptor values by NAME (not index)
+        // These are known values from Python's native RDKit for ethanol (CCO)
+        
+        // MolWt: from rdkit.Chem.Descriptors import MolWt; MolWt(Chem.MolFromSmiles('CCO'))
+        REQUIRE(name_to_idx.count("MolWt") == 1);
+        CHECK_THAT(descs[name_to_idx["MolWt"]], Catch::Matchers::WithinRel(46.069, 0.001));
+        
+        // ExactMolWt
+        REQUIRE(name_to_idx.count("ExactMolWt") == 1);
+        CHECK_THAT(descs[name_to_idx["ExactMolWt"]], Catch::Matchers::WithinRel(46.0418648, 0.0001));
+        
+        // HeavyAtomCount
+        REQUIRE(name_to_idx.count("HeavyAtomCount") == 1);
+        CHECK(descs[name_to_idx["HeavyAtomCount"]] == 3.0);
+        
+        // NumHDonors (ethanol has 1 OH)
+        REQUIRE(name_to_idx.count("NumHDonors") == 1);
+        CHECK(descs[name_to_idx["NumHDonors"]] == 1.0);
+        
+        // NumHAcceptors (ethanol has 1 O)
+        REQUIRE(name_to_idx.count("NumHAcceptors") == 1);
+        CHECK(descs[name_to_idx["NumHAcceptors"]] == 1.0);
+        
+        // RingCount (ethanol has 0 rings)
+        REQUIRE(name_to_idx.count("RingCount") == 1);
+        CHECK(descs[name_to_idx["RingCount"]] == 0.0);
+        
+        // NumRotatableBonds (ethanol has 0)
+        REQUIRE(name_to_idx.count("NumRotatableBonds") == 1);
+        CHECK(descs[name_to_idx["NumRotatableBonds"]] == 0.0);
+        
+        // TPSA (topological polar surface area)
+        REQUIRE(name_to_idx.count("TPSA") == 1);
+        CHECK_THAT(descs[name_to_idx["TPSA"]], Catch::Matchers::WithinRel(20.23, 0.01));
+        
+        // MolLogP
+        REQUIRE(name_to_idx.count("MolLogP") == 1);
+        CHECK_THAT(descs[name_to_idx["MolLogP"]], Catch::Matchers::WithinRel(-0.0014, 0.5));  // ~0
+        
+        delete mol;
+    }
+    
+    SECTION("Benzene descriptors - validate aromatic descriptors by name") {
+        auto mol = SmilesToMol("c1ccccc1");
+        REQUIRE(mol != nullptr);
+        
+        auto descs = extractRDKitDescriptors(*mol);
+        auto names = getRDKit217DescriptorNames();
+        
+        std::map<std::string, size_t> name_to_idx;
+        for (size_t i = 0; i < names.size(); ++i) {
+            name_to_idx[names[i]] = i;
+        }
+        
+        // Benzene-specific validations from native RDKit
+        CHECK(descs[name_to_idx["HeavyAtomCount"]] == 6.0);
+        CHECK(descs[name_to_idx["RingCount"]] == 1.0);
+        CHECK(descs[name_to_idx["NumAromaticRings"]] == 1.0);
+        CHECK(descs[name_to_idx["NumAromaticCarbocycles"]] == 1.0);
+        CHECK(descs[name_to_idx["fr_benzene"]] == 1.0);
+        CHECK_THAT(descs[name_to_idx["MolWt"]], Catch::Matchers::WithinRel(78.114, 0.001));
         
         delete mol;
     }
