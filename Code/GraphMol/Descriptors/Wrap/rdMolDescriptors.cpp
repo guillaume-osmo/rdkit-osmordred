@@ -1664,19 +1664,17 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
       "   - mol: molecule or protein under consideration
       "   - isProtein: flag to indicate if the input is a protein (default=False, free ligand).
       "   - includeLigand: flag to include or exclude a bound ligand when input is a protein (default=True)
-      "   - probeRadius: radius of the solvent probe (default=1.2)
-      "   - depth: control of number of dots per atom (default=4)
-      "   - dotDensity: control of accuracy (default=0)
+      "   - probeRadius: radius of the solvent probe (default=1.4)
+      "   - confId: conformer ID to use (default=-1)
       ")DOC";
   python::class_<RDKit::Descriptors::DoubleCubicLatticeVolume>(
       "DoubleCubicLatticeVolume",
       "Class for the Double Cubic Lattice Volume method",
       python::init<const RDKit::ROMol &,
-                   python::optional<bool, bool, double, int, int>>(
+                   python::optional<bool, bool, double, int>>(
           (python::args("self", "mol"), python::args("isProtein") = false,
            python::args("includeLigand") = true,
-           python::args("probeRadius") = 1.2, python::args("depth") = 4,
-           python::args("dotDensity") = 0),
+           python::args("probeRadius") = 1.4, python::args("confId") = -1),
           docString.c_str()))
       .def("GetSurfaceArea",
            &RDKit::Descriptors::DoubleCubicLatticeVolume::getSurfaceArea,
