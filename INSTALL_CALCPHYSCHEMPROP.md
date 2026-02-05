@@ -5,16 +5,18 @@ This guide explains how to build and install RDKit with custom features for Calc
 - **RDKit217**: 217 RDKit descriptors (C++ implementation)
 - **SMARTS291**: 291 Abraham features for property prediction
 
+All three support **batch processing with parallel threading**.
+
 ## Prerequisites
 
-1. **Conda environment with Boost**:
+### 1. Create Conda environment
 ```bash
-conda create -n rdkit_build python=3.11
-conda activate rdkit_build
-conda install -c conda-forge boost libboost-python libboost-devel eigen cmake
+conda create -n rdkit_osmordred_build python=3.11
+conda activate rdkit_osmordred_build
+conda install -c conda-forge boost libboost-python libboost-devel eigen cmake numpy pandas
 ```
 
-2. **LAPACK** (for Osmordred):
+### 2. Install LAPACK (for Osmordred)
 ```bash
 # macOS
 brew install lapack
@@ -29,12 +31,12 @@ sudo apt-get install liblapack-dev liblapacke-dev
 ```bash
 git clone https://github.com/guillaume-osmo/rdkit-osmordred.git
 cd rdkit-osmordred
-git checkout calcphyschemprop-with-bindings
+git checkout master  # master has all features merged
 ```
 
 ### 2. Configure with CMake
 ```bash
-mkdir build && cd build
+mkdir -p build && cd build
 
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
@@ -43,83 +45,133 @@ cmake .. \
   -DRDK_BUILD_DESCRIPTORS3D=ON \
   -DRDK_INSTALL_INTREE=ON \
   -DBoost_ROOT=$CONDA_PREFIX \
-  -DPYTHON_EXECUTABLE=$CONDA_PREFIX/bin/python \
-  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX;/opt/homebrew/opt/lapack"
+  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
 ```
 
 ### 3. Build
 ```bash
-cmake --build . --parallel 8
+make -j8
 ```
 
 ### 4. Install to conda environment
 ```bash
-cmake --install .
+conda activate rdkit_osmordred_build
 
-# Copy to site-packages
+# Copy rdkit Python package to site-packages
 SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
-cp -r ../rdkit $SITE_PACKAGES/
-cp -r ../lib/*.dylib $SITE_PACKAGES/rdkit/  # macOS
-# or: cp -r ../lib/*.so $SITE_PACKAGES/rdkit/  # Linux
+cp -r rdkit $SITE_PACKAGES/
 
-# Fix rpaths (macOS only)
-cd $SITE_PACKAGES/rdkit
-for so in *.so Chem/*.so ML/*/*.so DataManip/*/*.so SimDivFilters/*.so; do
-  [ -f "$so" ] && install_name_tool -add_rpath "@loader_path" "$so" 2>/dev/null
-done
+# Copy dylibs to conda lib (for rpath resolution)
+cp lib/*.dylib $CONDA_PREFIX/lib/
+
+echo "Installed to $SITE_PACKAGES"
 ```
 
 ## Verify Installation
 
+**IMPORTANT**: Unset `DYLD_LIBRARY_PATH` if it points to another RDKit:
+```bash
+unset DYLD_LIBRARY_PATH
+```
+
+Then test:
 ```python
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 
 mol = Chem.MolFromSmiles('CCO')
+smiles_list = ['CCO', 'CCC', 'c1ccccc1']
 
 # SMARTS291 (291 Abraham features)
 abraham = rdMolDescriptors.CalcAbrahamFeatures(mol)
 print(f"CalcAbrahamFeatures: {len(abraham)} features")  # 291
 
+# SMARTS291 Batch (parallel)
+batch = rdMolDescriptors.CalcAbrahamFeaturesBatch(smiles_list, 4)
+print(f"CalcAbrahamFeaturesBatch: {len(batch)} x {len(batch[0])} features")
+
 # Osmordred (3585 features)
 osmordred = rdMolDescriptors.CalcOsmordred(mol)
 print(f"CalcOsmordred: {len(osmordred)} features")  # 3585
+
+# Osmordred Batch (parallel)
+batch = rdMolDescriptors.CalcOsmordredBatch(smiles_list, 4)
+print(f"CalcOsmordredBatch: {len(batch)} x {len(batch[0])} features")
 
 # RDKit217 (217 features)
 rdkit217 = rdMolDescriptors.ExtractRDKitDescriptorsFromMolsBatch([mol], 1)
 print(f"RDKit217: {len(rdkit217[0])} features")  # 217
 
-# Get descriptor names
-names = rdMolDescriptors.GetRDKit217DescriptorNames()
-print(f"RDKit217 names: {len(names)} names")  # 217
+# RDKit217 Batch from SMILES (parallel)
+batch = rdMolDescriptors.ExtractRDKitDescriptorsBatch(smiles_list, 4)
+print(f"ExtractRDKitDescriptorsBatch: {len(batch)} x {len(batch[0])} features")
+
+print("\nALL FEATURES WORKING!")
 ```
 
-## Branch Structure
+## Available Functions
 
-```
-calcphyschemprop-with-bindings (recommended)
-├── osmordred-v2-release-2025.09.3 (3585 features)
-├── rdkit217-release-2025.09.3 (217 features)
-└── smarts291-release-2025.09.3 (291 features)
-```
-
-## Features
-
+### Single Molecule
 | Feature | Function | Output |
 |---------|----------|--------|
 | SMARTS291 | `CalcAbrahamFeatures(mol)` | 291 doubles |
 | Osmordred | `CalcOsmordred(mol)` | 3585 doubles |
-| RDKit217 | `ExtractRDKitDescriptorsFromMolsBatch([mols], n_jobs)` | 217 doubles per mol |
-| RDKit217 Names | `GetRDKit217DescriptorNames()` | 217 strings |
+| Osmordred w/timeout | `CalcOsmordredWithTimeout(mol, 60)` | 3585 doubles (60s timeout) |
 
-## Golden Reference Tests
+### Batch Processing (Parallel)
+| Feature | Function | Output |
+|---------|----------|--------|
+| SMARTS291 | `CalcAbrahamFeaturesBatch(smiles_list, n_jobs)` | List of 291-d vectors |
+| SMARTS291 | `CalcAbrahamFeaturesBatchFromMols(mols, n_jobs)` | List of 291-d vectors |
+| Osmordred | `CalcOsmordredBatch(smiles_list, n_jobs)` | List of 3585-d vectors |
+| Osmordred | `CalcOsmordredBatchFromMols(mols, n_jobs)` | List of 3585-d vectors |
+| RDKit217 | `ExtractRDKitDescriptorsBatch(smiles_list, n_jobs)` | List of 217-d vectors |
+| RDKit217 | `ExtractRDKitDescriptorsFromMolsBatch(mols, n_jobs)` | List of 217-d vectors |
 
-The branch includes C++ unit tests with golden reference data for validation:
-- `testOsmordred`: Validates against NCI 1000 molecules
-- `testRDKit217`: Validates against NCI 1000 molecules + name validation
-- `testSMARTS291`: Validates against NCI 1000 molecules
+### Utilities
+| Function | Description |
+|----------|-------------|
+| `GetRDKit217DescriptorNames()` | 217 descriptor names |
+| `GetOsmordredDescriptorNames()` | 3585 descriptor names |
+| `HasOsmordredSupport()` | Check if Osmordred is available |
 
-Run tests:
+## Performance Notes
+
+### Osmordred Timeouts
+- Osmordred has a **60 second timeout** per molecule
+- Very complex molecules (>10 rings or >200 heavy atoms) may hang
+- Use batch functions which handle timeouts automatically
+
+### Recommended Batch Sizes
+- Process molecules in chunks of ~100 to avoid memory issues
+- Use `n_jobs=0` for auto-detection of CPU cores
+
+## Troubleshooting
+
+### Import Error: Library not loaded
+If you see `Library not loaded: @rpath/libRDKit...`:
+```bash
+# Make sure dylibs are in conda lib
+cp /path/to/rdkit-osmordred/build/lib/*.dylib $CONDA_PREFIX/lib/
+```
+
+### Wrong RDKit version loaded
+If features are missing, check `DYLD_LIBRARY_PATH`:
+```bash
+echo $DYLD_LIBRARY_PATH
+unset DYLD_LIBRARY_PATH  # Clear if pointing to another RDKit
+```
+
+## Branch History
+
+The `master` branch contains all features merged:
+- Osmordred v2 (3585 features)
+- RDKit217 (217 features)  
+- SMARTS291 (291 Abraham features)
+- All batch functions with parallel processing
+
+## Running Tests
+
 ```bash
 cd build
 ctest -R "testOsmordred|testRDKit217|testSMARTS291" -V
