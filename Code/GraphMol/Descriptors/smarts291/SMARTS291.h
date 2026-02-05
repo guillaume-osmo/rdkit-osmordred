@@ -1,7 +1,7 @@
 //  Copyright (c) 2025, Guillaume Godin Osmo Labs, PBC's and others
 //  All rights reserved.
 //
-// SMARTS291 - Abraham V2 SMARTS-based Features
+// SMARTS291 - Abraham SMARTS-based Features
 // 
 // This module provides 291 SMARTS-based features for molecular property prediction.
 // The features consist of:

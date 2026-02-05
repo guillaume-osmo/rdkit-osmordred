@@ -1,8 +1,8 @@
 //  Copyright (c) 2025, Guillaume Godin Osmo Labs, PBC's and others
 //  All rights reserved.
 //
-// SMARTS291 - Abraham V2 SMARTS-based Features Unit Tests
-// Tests C++ implementation against Python CalcAbrahamsV2Features golden reference
+// SMARTS291 - Abraham SMARTS-based Features Unit Tests
+// Tests C++ implementation against Python CalcAbrahamsFeatures golden reference
 
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
@@ -10,7 +10,7 @@
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/Descriptors/smarts291/SMARTS291.h>
-#include "abraham_v2_integration.cpp"  // Contains calcAbrahamsV2Features
+#include "abraham_integration.cpp"  // Contains calcAbrahamsFeatures
 
 #include <vector>
 #include <string>
@@ -54,7 +54,7 @@ TEST_CASE("SMARTS291 Basic Functionality", "[smarts291][basic]") {
         ROMol* mol = SmilesToMol("CCO");
         REQUIRE(mol != nullptr);
         
-        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsV2Features(*mol);
+        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsFeatures(*mol);
         
         // Should return 291 features (241 base + 50 golden)
         CHECK(features.size() == 291);
@@ -73,7 +73,7 @@ TEST_CASE("SMARTS291 Basic Functionality", "[smarts291][basic]") {
         ROMol* mol = SmilesToMol("c1ccccc1");  // Benzene
         REQUIRE(mol != nullptr);
         
-        std::vector<double> baseFeatures = Descriptors::Osmordred::extractAbrahamV2BaseFeatures(*mol);
+        std::vector<double> baseFeatures = Descriptors::Osmordred::extractAbrahamBaseFeatures(*mol);
         
         // Should return exactly 241 base features
         CHECK(baseFeatures.size() == 241);
@@ -89,7 +89,7 @@ TEST_CASE("SMARTS291 Batch Processing", "[smarts291][batch]") {
         ROMol* mol = SmilesToMol(smi);
         REQUIRE(mol != nullptr);
         
-        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsV2Features(*mol);
+        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsFeatures(*mol);
         CHECK(features.size() == 291);
         
         delete mol;
@@ -179,7 +179,7 @@ TEST_CASE("SMARTS291 NCI Golden Reference Test", "[smarts291][golden]") {
             continue;
         }
         
-        std::vector<double> computed = Descriptors::Osmordred::calcAbrahamsV2Features(*mol);
+        std::vector<double> computed = Descriptors::Osmordred::calcAbrahamsFeatures(*mol);
         delete mol;
         
         if (computed.size() != 291) {
@@ -221,7 +221,7 @@ TEST_CASE("SMARTS291 Edge Cases", "[smarts291][edge]") {
         ROMol* mol = SmilesToMol("C");  // Methane
         REQUIRE(mol != nullptr);
         
-        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsV2Features(*mol);
+        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsFeatures(*mol);
         CHECK(features.size() == 291);
         
         delete mol;
@@ -232,7 +232,7 @@ TEST_CASE("SMARTS291 Edge Cases", "[smarts291][edge]") {
         ROMol* mol = SmilesToMol("CC(C)CCCC(C)C1CCC2C1(CCC3C2CC=C4C3(CCC(C4)O)C)C");
         REQUIRE(mol != nullptr);
         
-        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsV2Features(*mol);
+        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsFeatures(*mol);
         CHECK(features.size() == 291);
         
         delete mol;
@@ -242,7 +242,7 @@ TEST_CASE("SMARTS291 Edge Cases", "[smarts291][edge]") {
         ROMol* mol = SmilesToMol("c1ccc(N)c(O)c1S");  // Amino-thiophenol
         REQUIRE(mol != nullptr);
         
-        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsV2Features(*mol);
+        std::vector<double> features = Descriptors::Osmordred::calcAbrahamsFeatures(*mol);
         CHECK(features.size() == 291);
         
         delete mol;

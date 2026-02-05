@@ -1,4 +1,4 @@
-// Auto-generated query functions for Abraham V2 features
+// Auto-generated query functions for Abraham features
 // These queries are in the EXACT order the trained model expects
 
 #include <GraphMol/ROMol.h>
@@ -13,7 +13,7 @@ namespace Osmordred {
 
 // Get 241 base feature queries in EXACT model order
 // Thread-safe initialization using C++11 static local variable (guaranteed thread-safe)
-const std::vector<std::shared_ptr<RWMol>>& GetQueriesAbrahamV2BaseFeatures() {
+const std::vector<std::shared_ptr<RWMol>>& GetQueriesAbrahamBaseFeatures() {
     static std::vector<std::shared_ptr<RWMol>> queries;
     static std::once_flag init_flag;
     

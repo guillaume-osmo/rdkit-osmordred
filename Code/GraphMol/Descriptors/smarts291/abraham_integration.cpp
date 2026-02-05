@@ -1,9 +1,9 @@
-// CLEAN Abraham V2 Integration - Uses new query system
+// CLEAN Abraham Integration - Uses new query system
 // Generated to match trained model EXACTLY
 // EACH MODEL TYPE USES ITS OWN GOLDEN FEATURES!
 
 #include "Osmordred.h"
-#include "abraham_v2_queries.h"
+#include "abraham_queries.h"
 #include "AbrahamGBAABRAHAM.h"
 #include "AbrahamGBSABRAHAM.h"
 #include "AbrahamRidgeBABRAHAM.h"
@@ -21,12 +21,12 @@ namespace Descriptors {
 namespace Osmordred {
 
 // Extract 241 base features using the new query system
-std::vector<double> extractAbrahamV2BaseFeatures(const RDKit::ROMol& mol) {
+std::vector<double> extractAbrahamBaseFeatures(const RDKit::ROMol& mol) {
     std::vector<double> features;
     features.reserve(241);
     
     // Use the new query system that returns queries in EXACT model order
-    auto queries = GetQueriesAbrahamV2BaseFeatures();
+    auto queries = GetQueriesAbrahamBaseFeatures();
     
     // Safety check: if queries.size() is wrong, limit to 241
     size_t max_queries = (queries.size() > 241) ? 241 : queries.size();
@@ -227,9 +227,9 @@ std::vector<double> generateGoldenFeaturesRidge(const std::vector<double>& baseF
 }
 
 
-std::vector<double> calcAbrahamsV2(const RDKit::ROMol& mol) {
+std::vector<double> calcAbrahams(const RDKit::ROMol& mol) {
     // Extract 241 base features
-    std::vector<double> baseFeatures = extractAbrahamV2BaseFeatures(mol);
+    std::vector<double> baseFeatures = extractAbrahamBaseFeatures(mol);
     
     // Handle unexpected feature counts gracefully (e.g., 482 = 2x241, likely threading bug)
     if (baseFeatures.size() != 241) {
@@ -271,9 +271,9 @@ std::vector<double> calcAbrahamsV2(const RDKit::ROMol& mol) {
     return {A, B, S, E, L, V};
 }
 
-std::vector<double> calcAbrahamsV2Features(const RDKit::ROMol& mol) {
+std::vector<double> calcAbrahamsFeatures(const RDKit::ROMol& mol) {
     // Returns the 291 features for the A model (base + A's golden features)
-    std::vector<double> baseFeatures = extractAbrahamV2BaseFeatures(mol);
+    std::vector<double> baseFeatures = extractAbrahamBaseFeatures(mol);
     std::vector<double> goldenA = generateGoldenFeaturesA(baseFeatures);
     
     std::vector<double> allFeatures = baseFeatures;
