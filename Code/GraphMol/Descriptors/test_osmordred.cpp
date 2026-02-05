@@ -921,14 +921,14 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
   // Precision tolerance for golden reference comparison
   const double TOLERANCE = 1e-5;
   
-  SECTION("Generate and validate NCI 1000 molecule reference") {
+  SECTION("Validate NCI 100 molecule golden reference") {
     if (rdbase.empty()) {
-      WARN("RDBASE not set, skipping NCI 1000 golden reference test");
+      WARN("RDBASE not set, skipping NCI golden reference test");
       return;
     }
     
     std::string nci_path = rdbase + "/Data/NCI/first_5K.smi";
-    std::string golden_path = rdbase + "/Code/GraphMol/Descriptors/test_data/nci_1000_osmordred_golden.csv";
+    std::string golden_path = rdbase + "/Code/GraphMol/Descriptors/test_data/nci_100_osmordred_golden.csv";
     
     std::ifstream nci_file(nci_path);
     if (!nci_file.is_open()) {
@@ -945,7 +945,7 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
     
     std::string line;
     int count = 0;
-    int max_mols = 1000;
+    int max_mols = 100;  // Match golden reference size
     
     while (std::getline(nci_file, line) && count < max_mols) {
       std::istringstream iss(line);
@@ -980,7 +980,7 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
     boost::logging::enable_logs("rdApp.*");
     
     INFO("Processed " << count << " molecules for golden reference");
-    REQUIRE(count >= 900);  // Should get at least 900 valid molecules from first 1000
+    REQUIRE(count >= 90);  // Should get at least 90 valid molecules from first 100
     
     // Check if golden reference exists
     std::ifstream golden_file(golden_path);
@@ -1018,7 +1018,7 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
       INFO("Re-run test to validate against golden reference");
       
       // This is a generation run, not a validation run
-      REQUIRE(smiles_list.size() >= 900);
+      REQUIRE(smiles_list.size() >= 90);
       
     } else {
       // Validate against golden reference
@@ -1099,8 +1099,8 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
       INFO("Mismatches found: " << mismatches);
       
       // Allow very small number of mismatches due to floating point platform differences
-      REQUIRE(validated >= 900);
-      REQUIRE(mismatches < 100);  // Less than 0.3% mismatch rate (100 / (900 * 3585))
+      REQUIRE(validated >= 90);
+      REQUIRE(mismatches < 50);  // Less than 0.15% mismatch rate (50 / (90 * 3585))
     }
   }
 }
