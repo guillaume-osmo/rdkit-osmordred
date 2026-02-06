@@ -410,10 +410,13 @@ class TestOsmordred(unittest.TestCase):
             'CalcDSMat', 'CalcDN2Mat', 'CalcFrags', 'CalcAddFeatures',
             'CalcInformationContent',
             # SMARTS291 and RDKit217 functions
+            'HasSMARTS291Support',  # Check if SMARTS291 is available
             'CalcAbrahamFeatures',
             'ExtractSMARTS291Batch',  # Multi-threaded batch SMARTS291 extraction
             'GetSMARTS291FeatureNames',  # Get 291 SMARTS feature names
-            'ExtractRDKitDescriptorsFromMolsBatch',
+            'ExtractRDKitDescriptors',  # Single molecule RDKit217
+            'ExtractRDKitDescriptorsBatch',  # Batch from SMILES RDKit217
+            'ExtractRDKitDescriptorsFromMolsBatch',  # Batch from mols RDKit217
             'GetRDKit217DescriptorNames'
         ]
         
@@ -431,6 +434,19 @@ class TestSMARTS291(unittest.TestCase):
         self.benzene = Chem.MolFromSmiles("c1ccccc1")
         self.acetic_acid = Chem.MolFromSmiles("CC(=O)O")
         self.amine = Chem.MolFromSmiles("CCN")
+        
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_has_smarts291_support_exists(self):
+        """Test that HasSMARTS291Support function exists."""
+        self.assertTrue(hasattr(rdMD, 'HasSMARTS291Support'))
+        
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_has_smarts291_support_returns_bool(self):
+        """Test HasSMARTS291Support returns a boolean."""
+        result = rdMD.HasSMARTS291Support()
+        self.assertIsInstance(result, bool)
+        # Should be True since we have Osmordred support
+        self.assertTrue(result)
         
     @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
     def test_calc_abraham_features_exists(self):
@@ -589,7 +605,85 @@ class TestRDKit217(unittest.TestCase):
                           'MinEStateIndex', 'MaxAbsEStateIndex']
         for name in expected_names:
             self.assertIn(name, names_list, f"Expected descriptor {name} not found")
+    
+    # =========================================================================
+    # ExtractRDKitDescriptors (single molecule)
+    # =========================================================================
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_rdkit_descriptors_exists(self):
+        """Test that ExtractRDKitDescriptors function exists."""
+        self.assertTrue(hasattr(rdMD, 'ExtractRDKitDescriptors'))
+        
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_rdkit_descriptors_single(self):
+        """Test ExtractRDKitDescriptors with single molecule."""
+        result = rdMD.ExtractRDKitDescriptors(self.ethanol)
+        result_list = to_list(result)
+        self.assertEqual(len(result_list), 217,
+                        f"Expected 217 features, got {len(result_list)}")
+                        
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_rdkit_descriptors_consistency(self):
+        """Test ExtractRDKitDescriptors returns consistent results."""
+        result1 = rdMD.ExtractRDKitDescriptors(self.ethanol)
+        result2 = rdMD.ExtractRDKitDescriptors(self.ethanol)
+        result1_list = to_list(result1)
+        result2_list = to_list(result2)
+        for f1, f2 in zip(result1_list, result2_list):
+            if f1 == f1 and f2 == f2:  # Both not NaN
+                self.assertAlmostEqual(f1, f2, places=6)
+    
+    # =========================================================================
+    # ExtractRDKitDescriptorsBatch (from SMILES strings)
+    # =========================================================================
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_rdkit_descriptors_batch_exists(self):
+        """Test that ExtractRDKitDescriptorsBatch function exists."""
+        self.assertTrue(hasattr(rdMD, 'ExtractRDKitDescriptorsBatch'))
+        
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_rdkit_descriptors_batch_from_smiles(self):
+        """Test ExtractRDKitDescriptorsBatch with SMILES strings."""
+        smiles_list = ["CCO", "c1ccccc1", "CC(=O)O"]
+        result = rdMD.ExtractRDKitDescriptorsBatch(smiles_list, 0)
+        result_list = to_list(result)
+        self.assertEqual(len(result_list), 3)
+        for mol_features in result_list:
+            mol_features_list = to_list(mol_features)
+            self.assertEqual(len(mol_features_list), 217)
             
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_rdkit_descriptors_batch_threading(self):
+        """Test ExtractRDKitDescriptorsBatch with different n_jobs values."""
+        smiles_list = ["CCO", "c1ccccc1", "CC(=O)O", "CCN", "CCCC"]
+        # Test with n_jobs=0 (auto)
+        result_auto = rdMD.ExtractRDKitDescriptorsBatch(smiles_list, 0)
+        self.assertEqual(len(to_list(result_auto)), 5)
+        # Test with n_jobs=1 (single thread)
+        result_single = rdMD.ExtractRDKitDescriptorsBatch(smiles_list, 1)
+        self.assertEqual(len(to_list(result_single)), 5)
+        # Test with n_jobs=2 (two threads)
+        result_two = rdMD.ExtractRDKitDescriptorsBatch(smiles_list, 2)
+        self.assertEqual(len(to_list(result_two)), 5)
+        
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_rdkit_descriptors_batch_consistency_with_single(self):
+        """Test that batch SMILES results match single molecule results."""
+        # Get batch from SMILES
+        batch_result = rdMD.ExtractRDKitDescriptorsBatch(["CCO"], 1)
+        batch_features = to_list(to_list(batch_result)[0])
+        # Get single molecule result
+        single_features = to_list(rdMD.ExtractRDKitDescriptors(self.ethanol))
+        # Compare
+        self.assertEqual(len(batch_features), len(single_features))
+        for i, (b, s) in enumerate(zip(batch_features, single_features)):
+            if b == b and s == s:  # Both not NaN
+                self.assertAlmostEqual(b, s, places=6,
+                    msg=f"Feature {i} mismatch: batch={b}, single={s}")
+    
+    # =========================================================================
+    # ExtractRDKitDescriptorsFromMolsBatch (from mol objects - existing tests)
+    # =========================================================================
     @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
     def test_extract_rdkit_descriptors_exists(self):
         """Test that ExtractRDKitDescriptorsFromMolsBatch function exists."""
