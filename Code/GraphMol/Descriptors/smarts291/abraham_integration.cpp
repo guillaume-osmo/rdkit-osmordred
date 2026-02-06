@@ -6,6 +6,7 @@
 // (AbrahamGBAABRAHAM.h, etc.) which are generated separately.
 // Define HAVE_ABRAHAM_MODELS to enable full Abraham parameter prediction.
 
+#include "SMARTS291.h"
 #include "abraham_queries.h"
 #include <GraphMol/RWMol.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
@@ -291,5 +292,14 @@ std::vector<double> calcAbrahamsFeatures(const RDKit::ROMol& mol) {
 }
 
 } // namespace Osmordred
+
+namespace SMARTS291 {
+
+bool hasSMARTS291Support() {
+    return true;  // SMARTS291 support is always available when this code is compiled
+}
+
+} // namespace SMARTS291
+
 } // namespace Descriptors
 } // namespace RDKit
