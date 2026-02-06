@@ -19,6 +19,8 @@
 
 #include <GraphMol/Descriptors/MolDescriptors.h>
 #include <GraphMol/Descriptors/Osmordred.h>
+#include <GraphMol/Descriptors/smarts291/SMARTS291.h>
+#include <GraphMol/Descriptors/rdkit217/RDKit217Descriptors.h>
 #include <GraphMol/Descriptors/AtomFeat.h>
 #include <GraphMol/Descriptors/OxidationNumbers.h>
 #include <GraphMol/Fingerprints/AtomPairs.h>
@@ -2010,6 +2012,74 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
         "CalcAlphaKappaShapeIndex function\n");
     python::def("CalcAbrahams", RDKit::Descriptors::Osmordred::calcAbrahams,
         "CalcAbrahams function\n");
+    
+    // =========================================================================
+    // SMARTS291: Abraham SMARTS-based features (291 features)
+    // =========================================================================
+    python::def("CalcAbrahamFeatures", RDKit::Descriptors::Osmordred::calcAbrahamsFeatures,
+        "Calculate 291 Abraham SMARTS-based features for molecular property prediction.\n"
+        "Returns: vector of 291 double values (241 base SMARTS + 50 golden ratio features)\n"
+        "These features are used for physicochemical property prediction (V, E, L, B, S, A).\n");
+    
+    // Batch wrapper for SMARTS291 with multi-threading (accepts Python list of SMILES strings)
+    auto smarts291_batch_impl = +[](python::list smiles_py, char param, int n_jobs) {
+        std::vector<std::string> smiles_list;
+        smiles_list.reserve(python::len(smiles_py));
+        for (int i = 0; i < python::len(smiles_py); ++i) {
+            python::object obj = smiles_py[i];
+            if (obj.is_none()) {
+                smiles_list.push_back("");  // Empty string for invalid SMILES
+            } else {
+                smiles_list.push_back(python::extract<std::string>(obj));
+            }
+        }
+        return RDKit::Descriptors::SMARTS291::extractSMARTS291Batch(smiles_list, param, n_jobs);
+    };
+    python::def("ExtractSMARTS291Batch", smarts291_batch_impl,
+        (python::arg("smiles_list"), python::arg("param")='A', python::arg("n_jobs")=0),
+        "Extract 291 SMARTS-based Abraham features from SMILES in parallel.\n"
+        "Input: list of SMILES strings, param (model type: 'A' default), n_jobs (0=auto)\n"
+        "Output: list of 291-feature vectors (241 base + 50 golden features)\n"
+        "Uses parallel processing when n_jobs > 0 (0 = auto-detect CPU count).\n");
+    
+    python::def("GetSMARTS291FeatureNames", RDKit::Descriptors::SMARTS291::getSMARTS291FeatureNames,
+        (python::arg("param")='A'),
+        "Get the 291 SMARTS feature names (241 base + 50 golden for specified model).\n"
+        "Returns: vector of 291 strings with feature names.\n");
+    
+    // =========================================================================
+    // RDKit217: Standard RDKit descriptors from C++ (217 features)
+    // =========================================================================
+    // Wrapper for extractRDKitDescriptorsFromMolsBatch that accepts Python list
+    auto rdkit217_from_mols_impl = +[](python::list mols_py, int n_jobs) {
+        std::vector<const RDKit::ROMol*> mols;
+        mols.reserve(python::len(mols_py));
+        for (int i = 0; i < python::len(mols_py); ++i) {
+            python::object obj = mols_py[i];
+            if (obj.is_none()) {
+                mols.push_back(nullptr);
+                continue;
+            }
+            try {
+                const RDKit::ROMol& mol = python::extract<const RDKit::ROMol&>(obj);
+                mols.push_back(&mol);
+            } catch (...) {
+                mols.push_back(nullptr);
+            }
+        }
+        return RDKit::Descriptors::Osmordred::extractRDKitDescriptorsFromMolsBatch(mols, n_jobs);
+    };
+    python::def("ExtractRDKitDescriptorsFromMolsBatch", rdkit217_from_mols_impl,
+        (python::arg("mols"), python::arg("n_jobs")=0),
+        "Extract 217 RDKit descriptors from mol objects in parallel.\n"
+        "Input: list of RDKit Mol objects (can contain None for invalid molecules)\n"
+        "Output: list of descriptor vectors (217 features per molecule)\n"
+        "Uses parallel processing when n_jobs > 0 (0 = auto-detect CPU count).\n");
+    
+    python::def("GetRDKit217DescriptorNames", RDKit::Descriptors::Osmordred::getRDKit217DescriptorNames,
+        "Get the 217 RDKit descriptor names in exact order matching Python's Descriptors._descList.\n"
+        "Returns: vector of 217 strings with descriptor names.\n");
+    
     python::def("CalcPol", RDKit::Descriptors::Osmordred::calcPol,
         "CalcPol function\n");
     python::def("CalcMR", RDKit::Descriptors::Osmordred::calcMR,
