@@ -414,6 +414,7 @@ class TestOsmordred(unittest.TestCase):
             'CalcAbrahamFeatures',
             'ExtractSMARTS291Batch',  # Multi-threaded batch SMARTS291 extraction
             'GetSMARTS291FeatureNames',  # Get 291 SMARTS feature names
+            'ExtractSMARTS291FromMolsBatch',  # Batch from mols SMARTS291
             'ExtractRDKitDescriptors',  # Single molecule RDKit217
             'ExtractRDKitDescriptorsBatch',  # Batch from SMILES RDKit217
             'ExtractRDKitDescriptorsFromMolsBatch',  # Batch from mols RDKit217
@@ -571,6 +572,50 @@ class TestSMARTS291Batch(unittest.TestCase):
         result = rdMD.ExtractSMARTS291Batch(smiles_with_empty, 'A', 0)
         result_list = to_list(result)
         self.assertEqual(len(result_list), 3)
+
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_smarts291_from_mols_batch_exists(self):
+        """Test that ExtractSMARTS291FromMolsBatch function exists."""
+        self.assertTrue(hasattr(rdMD, 'ExtractSMARTS291FromMolsBatch'))
+
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_smarts291_from_mols_batch(self):
+        """Test ExtractSMARTS291FromMolsBatch with Mol objects."""
+        mols = [Chem.MolFromSmiles(smi) for smi in self.smiles_list]
+        result = rdMD.ExtractSMARTS291FromMolsBatch(mols, 'A', 0)
+        result_list = to_list(result)
+        self.assertEqual(len(result_list), 5)
+        for mol_features in result_list:
+            mol_features_list = to_list(mol_features)
+            self.assertEqual(len(mol_features_list), 291)
+
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_smarts291_from_mols_batch_with_none(self):
+        """Test ExtractSMARTS291FromMolsBatch handles None molecules."""
+        mols = [Chem.MolFromSmiles("CCO"), None, Chem.MolFromSmiles("c1ccccc1")]
+        result = rdMD.ExtractSMARTS291FromMolsBatch(mols, 'A', 0)
+        result_list = to_list(result)
+        self.assertEqual(len(result_list), 3)
+        # Second should be NaN vector
+        second_features = to_list(result_list[1])
+        import math
+        self.assertTrue(math.isnan(second_features[0]), "Expected NaN for None molecule")
+
+    @unittest.skipIf(rdMD.HasOsmordredSupport() == False, "No osmordred support")
+    def test_extract_smarts291_from_mols_batch_consistency(self):
+        """Test that batch from Mols matches batch from SMILES."""
+        mols = [Chem.MolFromSmiles(smi) for smi in self.smiles_list]
+        result_from_mols = rdMD.ExtractSMARTS291FromMolsBatch(mols, 'A', 1)
+        result_from_smiles = rdMD.ExtractSMARTS291Batch(self.smiles_list, 'A', 1)
+        
+        mols_list = to_list(result_from_mols)
+        smiles_list = to_list(result_from_smiles)
+        
+        self.assertEqual(len(mols_list), len(smiles_list))
+        for i, (m_feats, s_feats) in enumerate(zip(mols_list, smiles_list)):
+            m_list = to_list(m_feats)
+            s_list = to_list(s_feats)
+            self.assertEqual(len(m_list), len(s_list))
 
 
 class TestRDKit217(unittest.TestCase):

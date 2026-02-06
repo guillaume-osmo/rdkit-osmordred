@@ -1664,9 +1664,8 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
       "   - mol: molecule or protein under consideration
       "   - isProtein: flag to indicate if the input is a protein (default=False, free ligand).
       "   - includeLigand: flag to include or exclude a bound ligand when input is a protein (default=True)
-      "   - probeRadius: radius of the solvent probe (default=1.2)
-      "   - depth: control of number of dots per atom (default=4)
-      "   - dotDensity: control of accuracy (default=0)
+      "   - probeRadius: radius of the solvent probe (default=1.4)
+      "   - confId: conformer ID to use (default=-1)
       ")DOC";
   python::class_<RDKit::Descriptors::DoubleCubicLatticeVolume>(
       "DoubleCubicLatticeVolume",
@@ -2046,6 +2045,26 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
         "Input: list of SMILES strings, param (model type: 'A' default), n_jobs (0=auto)\n"
         "Output: list of 291-feature vectors (241 base + 50 golden features)\n"
         "Uses parallel processing when n_jobs > 0 (0 = auto-detect CPU count).\n");
+    
+    // Batch wrapper for SMARTS291 from Mol objects (accepts Python list of Mol objects)
+    auto smarts291_from_mols_impl = +[](python::list mols_py, char param, int n_jobs) {
+        std::vector<const RDKit::ROMol*> mols;
+        mols.reserve(python::len(mols_py));
+        for (int i = 0; i < python::len(mols_py); ++i) {
+            python::object obj = mols_py[i];
+            if (obj.is_none()) {
+                mols.push_back(nullptr);
+            } else {
+                mols.push_back(python::extract<const RDKit::ROMol*>(obj));
+            }
+        }
+        return RDKit::Descriptors::SMARTS291::extractSMARTS291FromMolsBatch(mols, param, n_jobs);
+    };
+    python::def("ExtractSMARTS291FromMolsBatch", smarts291_from_mols_impl,
+        (python::arg("mols"), python::arg("param")='A', python::arg("n_jobs")=0),
+        "Extract 291 SMARTS-based Abraham features from Mol objects in parallel.\n"
+        "Input: list of RDKit Mol objects, param (model type: 'A' default), n_jobs (0=auto)\n"
+        "Output: list of 291-feature vectors (NaN for invalid molecules).\n");
     
     python::def("GetSMARTS291FeatureNames", RDKit::Descriptors::SMARTS291::getSMARTS291FeatureNames,
         (python::arg("param")='A'),

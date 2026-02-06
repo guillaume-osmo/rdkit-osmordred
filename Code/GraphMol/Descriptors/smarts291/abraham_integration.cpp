@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <future>
 #include <memory>
+#include <limits>
 
 namespace RDKit {
 namespace Descriptors {
@@ -180,6 +181,53 @@ std::vector<std::vector<double>> extractSMARTS291Batch(
                 }
             } catch (...) {}
             return std::vector<double>(291, 0.0);
+        }));
+    }
+    
+    for (auto& f : futures) {
+        results.push_back(f.get());
+    }
+    
+    return results;
+}
+
+std::vector<std::vector<double>> extractSMARTS291FromMolsBatch(
+    const std::vector<const ROMol*>& mols, char /*param*/, int n_jobs) {
+    
+    const double kNaN = std::numeric_limits<double>::quiet_NaN();
+    const std::vector<double> nanRow(291, kNaN);
+    
+    std::vector<std::vector<double>> results;
+    results.reserve(mols.size());
+    
+    unsigned int nThreads = getNumThreadsToUse(n_jobs);
+    
+    if (nThreads <= 1 || mols.size() < 10) {
+        for (const auto* mol : mols) {
+            if (mol) {
+                try {
+                    results.push_back(Osmordred::calcAbrahamsFeatures(*mol));
+                } catch (...) {
+                    results.push_back(nanRow);
+                }
+            } else {
+                results.push_back(nanRow);
+            }
+        }
+        return results;
+    }
+    
+    std::vector<std::future<std::vector<double>>> futures;
+    futures.reserve(mols.size());
+    
+    for (const auto* mol : mols) {
+        futures.emplace_back(std::async(std::launch::async, [mol, &nanRow]() {
+            if (mol) {
+                try {
+                    return Osmordred::calcAbrahamsFeatures(*mol);
+                } catch (...) {}
+            }
+            return nanRow;
         }));
     }
     

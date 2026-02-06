@@ -55,6 +55,10 @@ RDKIT_DESCRIPTORS_EXPORT std::vector<double> extractSMARTS291_V(const RDKit::ROM
 RDKIT_DESCRIPTORS_EXPORT std::vector<std::vector<double>> extractSMARTS291Batch(
     const std::vector<std::string>& smiles_list, char param = 'A', int n_jobs = 0);
 
+// Batch extraction from Mol objects
+RDKIT_DESCRIPTORS_EXPORT std::vector<std::vector<double>> extractSMARTS291FromMolsBatch(
+    const std::vector<const RDKit::ROMol*>& mols, char param = 'A', int n_jobs = 0);
+
 // Get feature names
 RDKIT_DESCRIPTORS_EXPORT std::vector<std::string> getBaseFeatureNames();
 RDKIT_DESCRIPTORS_EXPORT std::vector<std::string> getGoldenFeatureNames(char param = 'A');
