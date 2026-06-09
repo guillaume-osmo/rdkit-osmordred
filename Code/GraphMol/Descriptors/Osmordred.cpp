@@ -6076,7 +6076,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
     // v2.0: Get descriptor names in the same order as calcOsmordred returns values
     std::vector<std::string> getOsmordredDescriptorNames() {
         std::vector<std::string> names;
-        names.reserve(3590);
+        names.reserve(3588);
         
 // osmordredv3: real Mordred-style names (was addNames placeholders)
         // ABCIndex (2)
@@ -6588,7 +6588,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
             "Frag_181", "Frag_182", "Frag_183", "Frag_184", "Frag_185", "Frag_186", "Frag_187", "Frag_188", "Frag_189", "Frag_190",
             "Frag_191", "Frag_192", "Frag_193", "Frag_194", "Frag_195", "Frag_196", "Frag_197", "Frag_198", "Frag_199", "Frag_200",
             "Frag_201", "Frag_202", "Frag_203", "Frag_204", "Frag_205", "Frag_206", "Frag_207", "Frag_208", "Frag_209", "Frag_210",
-            "Frag_211", "Frag_212", "Frag_213", "Frag_214", "Frag_215", "Frag_216"
+            "Frag_211", "Frag_212", "Frag_213", "Frag_214"
         });
         // AddFeatures (7)
         names.insert(names.end(), {"nBridgedBonds", "nHydroxylPrimary", "nHydroxylSecondary", "nHydroxylTertiary", "isPolyAcid", "isPolyAlcohol", "nEndocyclicSingleBonds"});
@@ -10914,9 +10914,9 @@ std::vector<double> calcDN2Z(const RDKit::ROMol &mol) {
         "[CX4H2]-[cX3H0;$(*-A)]:[cX3H1]:[cX3H0;$(*-A)]","[CX4H0]-[CX4H0]-[ClX1H0]","[cX3H0;$(*-A)]1:[cX3H0;$(*-A)]:[cX3H0;$(*-A)]:[cX3H0;$(*-A)]:[cX3H0;$(*-A)]:[cX3H0;$(*-A)]:1","[A!#1x0+0]#[A!#1x0+0]","[SX2H0]","[ax3+0;$(*-[A!#1])]","[NX3H0+0]","[CX3H1]=[CX3H2]","[CX3H1]=[OX1H0+0]","[cX3H0;$(*-A)]",
         "[ax3+0;$(*-a)]","[nX3H1+0]","[OX2H0+0]","[A!#1x0+0]","[#8]","[cX3H0;!$(*-a);!$(*~A)]","[#7]","[#6]","[SX2H1]","[CX3](=O)[OX2H1]","[$([CX3H][#6]),$([CX3H2])]=[OX1]","[CX3;$([R0][#6]),$([H1R0])](=[OX1])[OX2][#6;!$(C=[O,N,S])]",
         "[CX3;$([H2]),$([H1][#6]),$(C([#6])[#6])]=[CX3;$([H2]),$([H1][#6]),$(C([#6])[#6])]","[CX4](F)(F)F","[NX3]=[CX3]","[NX3][CX3]=[NX3]","[NX1]#[CX2]","[CX3]=[OX1]","[#6][CX3](=O)[#6]","[CX3H1](=O)[#6]","[NX3][CX3](=[OX1])[#6]",
-        "[NX3][CX3](=[OX1])[#5]","[NX3][CX3](=[OX1])[OX2H0]","[NX3,NX4+][CX3](=[OX1])[OX2H,OX1-]","[#6][CX3](=[OX1])[OX2H0][#6]","[CX3](=[OX1])[OX1-]","[CX3](=O)[OX2H1]","[OX1]=[CX3]([OX2])[OX2]","[CX3]=[SX1]","[NX3][NX3]","[NX2]=N",
+        "[NX3][CX3](=[OX1])[#5]","[NX3][CX3](=[OX1])[OX2H0]","[NX3,NX4+][CX3](=[OX1])[OX2H,OX1-]","[#6][CX3](=[OX1])[OX2H0][#6]","[CX3](=[OX1])[OX1-]","[OX1]=[CX3]([OX2])[OX2]","[CX3]=[SX1]","[NX3][NX3]","[NX2]=N",
         "[NX2]=[OX1]","[$([NX3](=O)=O),$([NX3+](=O)[O-])][!#8]","[OX1]=[NX2][OX2]","[OX2,OX1-][OX2,OX1-]","[$([#16X3](=[OX1])([#6])[#6]),$([#16X3+]([OX1-])([#6])[#6])]","[$([#16X4](=[OX1])(=[OX1])([#6])[#6]),$([#16X4+2]([OX1-])([OX1-])([#6])[#6])]",
-        "[$([SX4](=[OX1])(=[OX1])([!O])[NX3]),$([SX4+2]([OX1-])([OX1-])([!O])[NX3])]","[$([#16X3](=[OX1])[OX2H0]),$([#16X3+]([OX1-])[OX2H0])]","[$([#16X3](=[OX1])[OX2H,OX1H0-]),$([#16X3+]([OX1-])[OX2H,OX1H0-])]",
+        "[$([#16X3](=[OX1])[OX2H0]),$([#16X3+]([OX1-])[OX2H0])]","[$([#16X3](=[OX1])[OX2H,OX1H0-]),$([#16X3+]([OX1-])[OX2H,OX1H0-])]",
         "[$([#16X4](=[OX1])(=[OX1])([#6])[OX2H0]),$([#16X4+2]([OX1-])([OX1-])([#6])[OX2H0])]","[$([#16X4](=[OX1])(=[OX1])([#6])[OX2H,OX1H0-]),$([#16X4+2]([OX1-])([OX1-])([#6])[OX2H,OX1H0-])]",
         "[$([#16X4](=[OX1])(=[OX1])([OX2H,OX1H0-])[OX2][#6]),$([#16X4+2]([OX1-])([OX1-])([OX2H,OX1H0-])[OX2][#6])]","[$([SX4](=O)(=O)(O)O),$([SX4+2]([O-])([O-])(O)O)]","[#16X2H0][#16X2H0]","[PX5](=[OX1])([OX1-])[OX1-]",
         "[PX5](=[OX1])([OX2H])[OX2H]","[PX6](=[OX1])([OX1-])([OX1-])[OX1-]"};
