@@ -9003,27 +9003,18 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
                     int stop = findLastOccupied(M, atomIdx); // get the end
 
 
-                    // ===================================================================
-                    // KNOWN BUG -- InformationContent (~102 reference diffs vs Mordred).
-                    // TOUCHY CODE: do NOT fix casually. Documented for a dedicated,
-                    // validated follow-up AFTER the v3 fixes are committed.
-                    //
-                    // When an atom's BFS frontier is exhausted it is marked
-                    // SP[atomIdx][r] = -2 (see ~40 lines below). On the NEXT radius this
-                    // `continue` fires BEFORE the atom is appended to clusterKeys, so the
-                    // atom VANISHES from the partition. As radius grows, more atoms drop
-                    // out, classes merge, Shannon entropy falls -> IC/TIC/CIC/SIC/BIC come
-                    // out too low (e.g. Benzene IC5 = 0, TIC5 = 0: partition collapsed to a
-                    // single class). The CN[r] cluster sizes should always sum to N.
-                    //   Minimal fix: keep the exhausted atom in the partition carrying its
-                    //     radius-(r-1) class instead of dropping it.
-                    //   Full fix: Morgan-canonical refinement
-                    //     code(r) = hash(class_{r-1}(self), multiset{class_{r-1}(neighbors)}).
-                    // Secondary: the eqKeys below are not Morgan-canonical (they ignore the
-                    // previous radius's classes) -- a second reason the partition is coarse.
-                    // ===================================================================
+                    // osmordredv3 FIX (keep-all): when an atom's BFS frontier is
+                    // exhausted (SP[atomIdx][r-1] == -2) it has no new neighbors, but it
+                    // must STAY in the partition. Previously this `continue` dropped it
+                    // BEFORE it was appended to clusterKeys, so atoms vanished as the
+                    // radius grew, classes merged and IC/TIC/CIC/SIC/BIC came out too low
+                    // (e.g. Benzene IC5 collapsed to 0). Keep it with a stable empty key so
+                    // CN[r] sizes always sum to N. Proven in Python on a faithful
+                    // computePipeline port (matches the binary 840/840): fixes the
+                    // collapse, 0 regressions vs the Mordred references.
                     if (start == -2) {
-                        continue;  // BUG: drops exhausted atoms from the partition (see above)
+                        clusterKeys.emplace_back(atomIdx, std::vector<int>{});  // keep atom; no new frontier
+                        continue;
                     }
 
                     std::vector<int> eqKeys;
