@@ -1814,7 +1814,11 @@ std::vector<double> calcIStateIndices(const RDKit::ROMol& mol){
     }
 
     std::vector<double> calcMoeType(const ROMol& mol) {
-        std::vector<double> res(54, 0.0);
+        // osmordredv3: 58 = LabuteASA + PEOE_VSA(14)+SMR_VSA(10)+SlogP_VSA(12)
+        // +EState_VSA(11)+VSA_EState(10). Was res(54) with `p += size-1`, which
+        // overlapped each family's first bin onto the previous family's last
+        // bin (dropped 4 values). Now `p += size` (below) -> no overlap.
+        std::vector<double> res(58, 0.0);
         double LabuteASA = RDKit::Descriptors::calcLabuteASA(mol);
         res[0] = LabuteASA;
         int p = 1;
@@ -1824,7 +1828,7 @@ std::vector<double> calcIStateIndices(const RDKit::ROMol& mol){
         for (size_t i = 0; i < PEOE_VSA.size(); ++i) {
             res[p + i] = PEOE_VSA[i];  // Copy PEOE_VSA to res[1:13]
         }
-        p +=PEOE_VSA.size()-1;
+        p += PEOE_VSA.size();
         //std::cout << "- new p: " << p << " | ";
 
         std::vector<double> SMR_VSA = RDKit::Descriptors::calcSMR_VSA(mol);
@@ -1833,7 +1837,7 @@ std::vector<double> calcIStateIndices(const RDKit::ROMol& mol){
         for (size_t i = 0; i < SMR_VSA.size(); ++i) {
             res[p + i] = SMR_VSA[i];  // Copy SMR_VSA to res[14:23]
         }
-        p +=SMR_VSA.size()-1;
+        p += SMR_VSA.size();
         //std::cout << "- new p: " << p << " | ";
 
         std::vector<double> SlogP_VSA = RDKit::Descriptors::calcSlogP_VSA(mol);
@@ -1841,7 +1845,7 @@ std::vector<double> calcIStateIndices(const RDKit::ROMol& mol){
         for (size_t i = 0; i < SlogP_VSA.size(); ++i) {
             res[p + i] = SlogP_VSA[i];  // Copy SlogP_VSA to res[23:34]
         }
-        p +=SlogP_VSA.size()-1;
+        p += SlogP_VSA.size();
         //std::cout << "- new p: " <<  p << " | ";
 
 
@@ -1850,7 +1854,7 @@ std::vector<double> calcIStateIndices(const RDKit::ROMol& mol){
         for (size_t i = 0; i < EState_VSA.size(); ++i) {
             res[p + i] = EState_VSA[i];  // Copy EState_VSA
         }
-        p +=EState_VSA.size()-1;
+        p += EState_VSA.size();
         //std::cout << "- new p: " << p << " | ";
 
         // EState (mordred) VSA_EState 1-9 & EState_VSA 1-10
@@ -1861,7 +1865,7 @@ std::vector<double> calcIStateIndices(const RDKit::ROMol& mol){
 	   // std::cout << " ( " << p+i;
 	}
 	//std::cout << ")\n";
-        p +=VSA_EState.size()-1;
+        p += VSA_EState.size();
         //std::cout << "- new p: " << p << " end ";
         return res;
     }
@@ -6072,7 +6076,7 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
     // v2.0: Get descriptor names in the same order as calcOsmordred returns values
     std::vector<std::string> getOsmordredDescriptorNames() {
         std::vector<std::string> names;
-        names.reserve(3585);
+        names.reserve(3589);
         
 // osmordredv3: real Mordred-style names (was addNames placeholders)
         // ABCIndex (2)
@@ -6288,14 +6292,14 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         names.insert(names.end(), {"Lipinski", "GhoseFilter"});
         // McGowanVolume (1)
         names.insert(names.end(), {"VMcGowan"});
-        // MoeType (54)
+        // MoeType (58): LabuteASA + VSA descriptors (RDKit binning); was 54 MoeType_ placeholders
         names.insert(names.end(), {
-            "MoeType_1", "MoeType_2", "MoeType_3", "MoeType_4", "MoeType_5", "MoeType_6", "MoeType_7", "MoeType_8", "MoeType_9", "MoeType_10",
-            "MoeType_11", "MoeType_12", "MoeType_13", "MoeType_14", "MoeType_15", "MoeType_16", "MoeType_17", "MoeType_18", "MoeType_19", "MoeType_20",
-            "MoeType_21", "MoeType_22", "MoeType_23", "MoeType_24", "MoeType_25", "MoeType_26", "MoeType_27", "MoeType_28", "MoeType_29", "MoeType_30",
-            "MoeType_31", "MoeType_32", "MoeType_33", "MoeType_34", "MoeType_35", "MoeType_36", "MoeType_37", "MoeType_38", "MoeType_39", "MoeType_40",
-            "MoeType_41", "MoeType_42", "MoeType_43", "MoeType_44", "MoeType_45", "MoeType_46", "MoeType_47", "MoeType_48", "MoeType_49", "MoeType_50",
-            "MoeType_51", "MoeType_52", "MoeType_53", "MoeType_54"
+            "LabuteASA", "PEOE_VSA1", "PEOE_VSA2", "PEOE_VSA3", "PEOE_VSA4", "PEOE_VSA5", "PEOE_VSA6", "PEOE_VSA7", "PEOE_VSA8", "PEOE_VSA9",
+            "PEOE_VSA10", "PEOE_VSA11", "PEOE_VSA12", "PEOE_VSA13", "PEOE_VSA14", "SMR_VSA1", "SMR_VSA2", "SMR_VSA3", "SMR_VSA4", "SMR_VSA5",
+            "SMR_VSA6", "SMR_VSA7", "SMR_VSA8", "SMR_VSA9", "SMR_VSA10", "SlogP_VSA1", "SlogP_VSA2", "SlogP_VSA3", "SlogP_VSA4", "SlogP_VSA5",
+            "SlogP_VSA6", "SlogP_VSA7", "SlogP_VSA8", "SlogP_VSA9", "SlogP_VSA10", "SlogP_VSA11", "SlogP_VSA12", "EState_VSA1", "EState_VSA2", "EState_VSA3",
+            "EState_VSA4", "EState_VSA5", "EState_VSA6", "EState_VSA7", "EState_VSA8", "EState_VSA9", "EState_VSA10", "EState_VSA11", "VSA_EState1", "VSA_EState2",
+            "VSA_EState3", "VSA_EState4", "VSA_EState5", "VSA_EState6", "VSA_EState7", "VSA_EState8", "VSA_EState9", "VSA_EState10"
         });
         // MolecularDistanceEdge (19)
         names.insert(names.end(), {
