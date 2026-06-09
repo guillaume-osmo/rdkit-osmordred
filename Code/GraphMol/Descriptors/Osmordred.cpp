@@ -9462,6 +9462,17 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
                     // computePipeline port (matches the binary 840/840): fixes the
                     // collapse, 0 regressions vs the Mordred references.
                     if (start == -2) {
+                        // osmordredv3 OOB FIX: propagate the exhausted marker into THIS
+                        // radius too. Without it SP[atomIdx][r] stays at its init -1, so the
+                        // NEXT radius reads start = -1 and the `for (pos = start; ...)` loop
+                        // does M[atomIdx][-1] -- an out-of-bounds read of the int before the
+                        // vector buffer. That garbage is binary-layout-dependent, so IC at the
+                        // deepest radius became non-reproducible across builds for
+                        // degenerate-symmetry molecules (e.g. P1PPP1: IC5 1.0 vs 1.4056).
+                        // The Python port hid this because Python M[a][-1] is valid negative
+                        // indexing. Setting -2 keeps the atom exhausted (empty key) every
+                        // subsequent radius -- deterministic, and matches the intended Basak result.
+                        SP[atomIdx][r] = -2;
                         clusterKeys.emplace_back(atomIdx, std::vector<int>{});  // keep atom; no new frontier
                         continue;
                     }
