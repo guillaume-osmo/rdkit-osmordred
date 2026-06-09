@@ -8827,9 +8827,11 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
     // for me the logic would be: truncated leaf key*100 + radius of the truncated leaf to be included in the remaining extension radius...
     // TODO : check if "-2" case is properly used in cluster because by definition an empty key is a key too to discrimitate!
 
-    int generateKey(int rootNum, int rootDeg, int bondOrder, int neighNum) {
-        //return (rootNum * 10 + rootDeg) * 1000 + bondOrder * 100 + neighNum;
-        return (rootNum * 10 + rootDeg) * 1000 + bondOrder * 100 + neighNum;
+    int generateKey(int rootNum, int rootDeg, int bondOrder, int neighNum, int neighDeg) {
+        // osmordredv3: fold in the NEIGHBOR degree too (Mordred parity). The radius-0
+        // partition is atomic-number only (built before the r>=1 loop), so adding
+        // neighbor degree here only affects r>=1 -> no radius-0 regressions.
+        return ((rootNum * 10 + rootDeg) * 1000 + bondOrder * 100 + neighNum) * 10 + neighDeg;
     }
 
 
@@ -9045,8 +9047,8 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
                             const Bond* bond = mol.getBondBetweenAtoms(rootIdx, nbIdx);
                             int bondOrder = getbondtypeint(bond->getBondType()); // don't need kekulize like in Mordred
                             int neighNum = mol.getAtomWithIdx(nbIdx)->getAtomicNum();
-                            // the logic is to look at the dgree of the source atom not the destination as we are at a delta order comparison (relation not absolute detection)
-                            eqKeys.push_back(generateKey(rootNum, rootDeg, bondOrder, neighNum));
+                            int neighDeg = mol.getAtomWithIdx(nbIdx)->getDegree();  // osmordredv3: neighbor degree (Mordred parity)
+                            eqKeys.push_back(generateKey(rootNum, rootDeg, bondOrder, neighNum, neighDeg));
                         }
                     }
 
