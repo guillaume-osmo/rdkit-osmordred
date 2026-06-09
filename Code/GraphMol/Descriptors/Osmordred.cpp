@@ -395,11 +395,7 @@ std::vector<double> calcAddFeatures(const RDKit::ROMol& mol) {
 
     // Function to calculate the number of acidic groups in a molecule
     int calcAcidicGroupCount(const ROMol& mol) {
-        // v3 fix: count acidic groups (carboxylic/sulfonic/phosphonic OH,
-        // anions, triflylamide, tetrazole), not alcohols. The previous
-        // GetAlcoholSmarts() counted phenols/alcohols (Cyanidin -> 5) and
-        // missed COOH (Glutathione -> 0). GetAcidicSmarts() matches Mordred.
-        return countMatches(mol, GetAcidicSmarts());
+        return countMatches(mol, GetAlcoholSmarts());
     }
 
     // Function to calculate the number of basic groups in a molecule
@@ -1465,17 +1461,22 @@ std::vector<double> calcAddFeatures(const RDKit::ROMol& mol) {
 
     // Main function to calculate the Topological Polar Surface Area (TPSA)
     std::vector<double> calcTopoPSA(const ROMol& mol) {
-        // v3 fix: res[0] = TopoPSA(NO) (N,O only); res[1] = TopoPSA (incl. S & P).
-        // Use RDKit's calcTPSA includeSandP flag (Ertl), which correctly handles
-        // thiols/sulfides/phosphorus on H-suppressed molecules. The previous
-        // hand-rolled getSulfurContribution/getPhosphorusContribution assumed
-        // explicit H and missed e.g. R-SH thiols (Glutathione lost the 38.80 term),
-        // so res[1] silently equalled res[0] for thiols.
-        // (getPhosphorusContribution/getSulfurContribution/hydrogenCount/
-        //  bondTypeCount above are now unused and may be removed in cleanup.)
+        double tpsa = RDKit::Descriptors::calcTPSA(mol);
+
         std::vector<double> res(2, 0.0);
-        res[0] = RDKit::Descriptors::calcTPSA(mol, false, false); // N,O only  -> TopoPSA(NO)
-        res[1] = RDKit::Descriptors::calcTPSA(mol, false, true);  // incl. S,P -> TopoPSA
+        res[0] = tpsa;
+
+
+        for (const auto& atom : mol.atoms()) {
+            int atomicNum = atom->getAtomicNum();
+            if (atomicNum == 15) { // Phosphorus
+                tpsa += getPhosphorusContribution(atom);
+            } else if (atomicNum == 16) { // Sulfur
+                tpsa += getSulfurContribution(atom);
+            }
+        }
+        res[1] = tpsa;
+
         return res;
     }
 
@@ -5057,10 +5058,8 @@ std::vector<double> calcDistMatrixDescsL(const RDKit::ROMol& mol) {
     RDKit::RWMol* cloneAndModifyMolecule(const RDKit::ROMol& originalMol, bool explicitHydrogens, bool saturated) {
         try {
 
-            // Check before proceeding (only meaningful when atoms keep their real
-            // identity; short-circuit on `saturated` so the carbon-skeleton path
-            // does not emit spurious warnings for these hypothetical objects).
-            if (saturated && hasExcessiveNeighbors(originalMol)) {
+            // Check before proceeding
+            if (hasExcessiveNeighbors(originalMol) && saturated) {
                 return nullptr;
             }
 
@@ -5093,15 +5092,9 @@ std::vector<double> calcDistMatrixDescsL(const RDKit::ROMol& mol) {
                 }
             }
 
-            // v3 fix: this is an artificial graph (heavy atoms abstracted to
-            // carbon, bonds forced to single), not a real molecule, so a
-            // carried-over hypervalent atom (e.g. pentavalent P -> C5) must NOT
-            // raise a valence error. Compute valences non-strictly and skip the
-            // strict valence check (SANITIZE_PROPERTIES).
+            // Perform sanitization with error handling
             unsigned int failedOps = 0;
-            clonedMol->updatePropertyCache(false);
-            RDKit::MolOps::sanitizeMol(*clonedMol, failedOps,
-                                       RDKit::MolOps::SANITIZE_ALL ^ RDKit::MolOps::SANITIZE_PROPERTIES);
+            RDKit::MolOps::sanitizeMol(*clonedMol, failedOps, RDKit::MolOps::SANITIZE_ALL);
 
             if (failedOps > 0) {
                 std::cerr << "Sanitization failed on properties, but continuing. Failed ops: " << failedOps << "\n";
@@ -6729,7 +6722,6 @@ std::vector<double> calculateETADescriptors(const RDKit::ROMol& mol) {
             }
             if (fused_ring_size > 12) {
                     // greater
-                descriptors[82]++; // v3 fix: nG12FRing (plain) was never incremented -> always 0
                 if (has_hetero) {
                     descriptors[83]++; // nFHRing sum
                     descriptors[93]++; // nG12FHRing
@@ -6776,12 +6768,6 @@ std::vector<double> calculateETADescriptors(const RDKit::ROMol& mol) {
 
 
     // Define the EState atom types and their SMARTS patterns
-    // NOTE (osmordred vs Mordred -- MINOR, intentionally left as-is): the
-    // aromatic-N E-state types below (aaN / aaNH, and aasC) can disagree with
-    // Mordred by ~0.05-0.11 on a single borderline heteroaromatic (Histidine's
-    // imidazole), where one ring N straddles the aaN/aaNH boundary under RDKit
-    // aromaticity. This is a tolerance-level atom-typing/tautomer effect, not a
-    // clear bug -- not changed in v3.
     static const std::vector<std::pair<std::string, std::string>> esPatterns = {
     {"sLi", "[LiD1]-*"},{"ssBe", "[BeD2](-*)-*"},{"ssssBe", "[BeD4](-*)(-*)(-*)-*"},
     {"ssBH", "[BD2H](-*)-*"},{"sssB", "[BD3](-*)(-*)-*"},{"ssssB", "[BD4](-*)(-*)(-*)-*"},
@@ -7900,11 +7886,8 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
 
         auto eigenValues = calcEigenValuesLAPACK(adjustedMatrix);
 
-        // v3 fix: descriptor names are <prop>-1l (low) then <prop>-1h (high),
-        // so emit min then max. Previously emitted max then min, swapping the
-        // -1l/-1h label of every BCUT descriptor.
-        results.push_back(*std::min_element(eigenValues.begin(), eigenValues.end())); // <prop>-1l : min eigenvalue
-        results.push_back(*std::max_element(eigenValues.begin(), eigenValues.end())); // <prop>-1h : max eigenvalue
+        results.push_back(*std::max_element(eigenValues.begin(), eigenValues.end())); // Max eigenvalue
+        results.push_back(*std::min_element(eigenValues.begin(), eigenValues.end())); // Min eigenvalue
     }
 
     return results;
@@ -9003,27 +8986,8 @@ std::vector<double> calcBCUTs(const RDKit::ROMol& mol) {
                     int stop = findLastOccupied(M, atomIdx); // get the end
 
 
-                    // ===================================================================
-                    // KNOWN BUG -- InformationContent (~102 reference diffs vs Mordred).
-                    // TOUCHY CODE: do NOT fix casually. Documented for a dedicated,
-                    // validated follow-up AFTER the v3 fixes are committed.
-                    //
-                    // When an atom's BFS frontier is exhausted it is marked
-                    // SP[atomIdx][r] = -2 (see ~40 lines below). On the NEXT radius this
-                    // `continue` fires BEFORE the atom is appended to clusterKeys, so the
-                    // atom VANISHES from the partition. As radius grows, more atoms drop
-                    // out, classes merge, Shannon entropy falls -> IC/TIC/CIC/SIC/BIC come
-                    // out too low (e.g. Benzene IC5 = 0, TIC5 = 0: partition collapsed to a
-                    // single class). The CN[r] cluster sizes should always sum to N.
-                    //   Minimal fix: keep the exhausted atom in the partition carrying its
-                    //     radius-(r-1) class instead of dropping it.
-                    //   Full fix: Morgan-canonical refinement
-                    //     code(r) = hash(class_{r-1}(self), multiset{class_{r-1}(neighbors)}).
-                    // Secondary: the eqKeys below are not Morgan-canonical (they ignore the
-                    // previous radius's classes) -- a second reason the partition is coarse.
-                    // ===================================================================
                     if (start == -2) {
-                        continue;  // BUG: drops exhausted atoms from the partition (see above)
+                        continue;  // Skip further processing but allow iteration
                     }
 
                     std::vector<int> eqKeys;
