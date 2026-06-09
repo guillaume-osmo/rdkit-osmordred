@@ -6074,77 +6074,520 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
         std::vector<std::string> names;
         names.reserve(3585);
         
-        auto addNames = [&names](const std::string& baseName, int count) {
-            if (count == 1) {
-                names.push_back(baseName);
-            } else {
-                for (int i = 1; i <= count; ++i) {
-                    names.push_back(baseName + "_" + std::to_string(i));
-                }
-            }
-        };
-        
-        // Add names in the exact same order as calcOsmordred appends values
-        addNames("ABCIndex", 2);
-        addNames("AcidBase", 2);
-        addNames("AdjacencyMatrix", 12);
-        addNames("Aromatic", 2);
-        addNames("AtomCount", 17);
-        addNames("Autocorrelation", 606);
-        addNames("BCUT", 24);
-        addNames("BalabanJ", 1);
-        addNames("BaryszMatrix", 104);
-        addNames("BertzCT", 1);
-        addNames("BondCount", 9);
-        addNames("RNCGRPCG", 2);
-        addNames("CarbonTypes", 11);
-        addNames("Chi", 56);
-        addNames("Constitutional", 16);
-        addNames("DetourMatrix", 14);
-        addNames("DistanceMatrix", 12);
-        addNames("EState", 404);
-        addNames("EccentricConnectivityIndex", 1);
-        addNames("ExtendedTopochemicalAtom", 45);
-        addNames("FragmentComplexity", 1);
-        addNames("Framework", 1);
-        addNames("HydrogenBond", 2);
-        addNames("LogS", 1);
-        addNames("InformationContent", 42);
-        addNames("KappaShapeIndex", 3);
-        addNames("Lipinski", 2);
-        addNames("McGowanVolume", 1);
-        addNames("MoeType", 54);
-        addNames("MolecularDistanceEdge", 19);
-        addNames("MolecularId", 12);
-        addNames("PathCount", 21);
-        addNames("Polarizability", 2);
-        addNames("RingCount", 138);
-        addNames("RotatableBond", 2);
-        addNames("SLogP", 2);
-        addNames("TopoPSA", 2);
-        addNames("TopologicalCharge", 21);
-        addNames("TopologicalIndex", 4);
-        addNames("VdwVolumeABC", 1);
-        addNames("VertexAdjacencyInformation", 1);
-        addNames("WalkCount", 21);
-        addNames("Weight", 2);
-        addNames("WienerIndex", 2);
-        addNames("ZagrebIndex", 4);
-        addNames("Pol", 1);
-        addNames("MR", 1);
-        addNames("Flexibility", 1);
-        addNames("Schultz", 1);
-        addNames("AlphaKappaShapeIndex", 3);
-        addNames("HEState", 88);
-        addNames("BEState", 1460);
-        addNames("Abrahams", 6);
-        addNames("ANMat", 25);
-        addNames("ASMat", 20);
-        addNames("AZMat", 15);
-        addNames("DSMat", 20);
-        addNames("DN2Mat", 20);
-        addNames("Frags", 215);
-        addNames("AddFeatures", 7);
+// osmordredv3: real Mordred-style names (was addNames placeholders)
+        // ABCIndex (2)
+        names.insert(names.end(), {"ABC", "ABCGG"});
+        // AcidBase (2)
+        names.insert(names.end(), {"nAcid", "nBase"});
+        // AdjacencyMatrix (12)
+        names.insert(names.end(), {
+            "SpAbs_A", "SpMax_A", "SpDiam_A", "SpAD_A", "SpMAD_A", "LogEE_A", "VE1_A", "VE2_A", "VE3_A", "VR1_A",
+            "VR2_A", "VR3_A"
+        });
+        // Aromatic (2)
+        names.insert(names.end(), {"nAromAtom", "nAromBond"});
+        // AtomCount (17)
+        names.insert(names.end(), {
+            "nAtom", "nHeavyAtom", "nSpiro", "nBridgehead", "nHetero", "nH", "nB", "nC", "nN", "nO",
+            "nS", "nP", "nF", "nCl", "nBr", "nI", "nX"
+        });
+        // Autocorrelation (606)
+        names.insert(names.end(), {
+            "ATS0dv", "ATS1dv", "ATS2dv", "ATS3dv", "ATS4dv", "ATS5dv", "ATS6dv", "ATS7dv", "ATS8dv", "ATS0d",
+            "ATS1d", "ATS2d", "ATS3d", "ATS4d", "ATS5d", "ATS6d", "ATS7d", "ATS8d", "ATS0s", "ATS1s",
+            "ATS2s", "ATS3s", "ATS4s", "ATS5s", "ATS6s", "ATS7s", "ATS8s", "ATS0Z", "ATS1Z", "ATS2Z",
+            "ATS3Z", "ATS4Z", "ATS5Z", "ATS6Z", "ATS7Z", "ATS8Z", "ATS0m", "ATS1m", "ATS2m", "ATS3m",
+            "ATS4m", "ATS5m", "ATS6m", "ATS7m", "ATS8m", "ATS0v", "ATS1v", "ATS2v", "ATS3v", "ATS4v",
+            "ATS5v", "ATS6v", "ATS7v", "ATS8v", "ATS0se", "ATS1se", "ATS2se", "ATS3se", "ATS4se", "ATS5se",
+            "ATS6se", "ATS7se", "ATS8se", "ATS0pe", "ATS1pe", "ATS2pe", "ATS3pe", "ATS4pe", "ATS5pe", "ATS6pe",
+            "ATS7pe", "ATS8pe", "ATS0are", "ATS1are", "ATS2are", "ATS3are", "ATS4are", "ATS5are", "ATS6are", "ATS7are",
+            "ATS8are", "ATS0p", "ATS1p", "ATS2p", "ATS3p", "ATS4p", "ATS5p", "ATS6p", "ATS7p", "ATS8p",
+            "ATS0i", "ATS1i", "ATS2i", "ATS3i", "ATS4i", "ATS5i", "ATS6i", "ATS7i", "ATS8i", "AATS0dv",
+            "AATS1dv", "AATS2dv", "AATS3dv", "AATS4dv", "AATS5dv", "AATS6dv", "AATS7dv", "AATS8dv", "AATS0d", "AATS1d",
+            "AATS2d", "AATS3d", "AATS4d", "AATS5d", "AATS6d", "AATS7d", "AATS8d", "AATS0s", "AATS1s", "AATS2s",
+            "AATS3s", "AATS4s", "AATS5s", "AATS6s", "AATS7s", "AATS8s", "AATS0Z", "AATS1Z", "AATS2Z", "AATS3Z",
+            "AATS4Z", "AATS5Z", "AATS6Z", "AATS7Z", "AATS8Z", "AATS0m", "AATS1m", "AATS2m", "AATS3m", "AATS4m",
+            "AATS5m", "AATS6m", "AATS7m", "AATS8m", "AATS0v", "AATS1v", "AATS2v", "AATS3v", "AATS4v", "AATS5v",
+            "AATS6v", "AATS7v", "AATS8v", "AATS0se", "AATS1se", "AATS2se", "AATS3se", "AATS4se", "AATS5se", "AATS6se",
+            "AATS7se", "AATS8se", "AATS0pe", "AATS1pe", "AATS2pe", "AATS3pe", "AATS4pe", "AATS5pe", "AATS6pe", "AATS7pe",
+            "AATS8pe", "AATS0are", "AATS1are", "AATS2are", "AATS3are", "AATS4are", "AATS5are", "AATS6are", "AATS7are", "AATS8are",
+            "AATS0p", "AATS1p", "AATS2p", "AATS3p", "AATS4p", "AATS5p", "AATS6p", "AATS7p", "AATS8p", "AATS0i",
+            "AATS1i", "AATS2i", "AATS3i", "AATS4i", "AATS5i", "AATS6i", "AATS7i", "AATS8i", "ATSC0c", "ATSC1c",
+            "ATSC2c", "ATSC3c", "ATSC4c", "ATSC5c", "ATSC6c", "ATSC7c", "ATSC8c", "ATSC0dv", "ATSC1dv", "ATSC2dv",
+            "ATSC3dv", "ATSC4dv", "ATSC5dv", "ATSC6dv", "ATSC7dv", "ATSC8dv", "ATSC0d", "ATSC1d", "ATSC2d", "ATSC3d",
+            "ATSC4d", "ATSC5d", "ATSC6d", "ATSC7d", "ATSC8d", "ATSC0s", "ATSC1s", "ATSC2s", "ATSC3s", "ATSC4s",
+            "ATSC5s", "ATSC6s", "ATSC7s", "ATSC8s", "ATSC0Z", "ATSC1Z", "ATSC2Z", "ATSC3Z", "ATSC4Z", "ATSC5Z",
+            "ATSC6Z", "ATSC7Z", "ATSC8Z", "ATSC0m", "ATSC1m", "ATSC2m", "ATSC3m", "ATSC4m", "ATSC5m", "ATSC6m",
+            "ATSC7m", "ATSC8m", "ATSC0v", "ATSC1v", "ATSC2v", "ATSC3v", "ATSC4v", "ATSC5v", "ATSC6v", "ATSC7v",
+            "ATSC8v", "ATSC0se", "ATSC1se", "ATSC2se", "ATSC3se", "ATSC4se", "ATSC5se", "ATSC6se", "ATSC7se", "ATSC8se",
+            "ATSC0pe", "ATSC1pe", "ATSC2pe", "ATSC3pe", "ATSC4pe", "ATSC5pe", "ATSC6pe", "ATSC7pe", "ATSC8pe", "ATSC0are",
+            "ATSC1are", "ATSC2are", "ATSC3are", "ATSC4are", "ATSC5are", "ATSC6are", "ATSC7are", "ATSC8are", "ATSC0p", "ATSC1p",
+            "ATSC2p", "ATSC3p", "ATSC4p", "ATSC5p", "ATSC6p", "ATSC7p", "ATSC8p", "ATSC0i", "ATSC1i", "ATSC2i",
+            "ATSC3i", "ATSC4i", "ATSC5i", "ATSC6i", "ATSC7i", "ATSC8i", "AATSC0c", "AATSC1c", "AATSC2c", "AATSC3c",
+            "AATSC4c", "AATSC5c", "AATSC6c", "AATSC7c", "AATSC8c", "AATSC0dv", "AATSC1dv", "AATSC2dv", "AATSC3dv", "AATSC4dv",
+            "AATSC5dv", "AATSC6dv", "AATSC7dv", "AATSC8dv", "AATSC0d", "AATSC1d", "AATSC2d", "AATSC3d", "AATSC4d", "AATSC5d",
+            "AATSC6d", "AATSC7d", "AATSC8d", "AATSC0s", "AATSC1s", "AATSC2s", "AATSC3s", "AATSC4s", "AATSC5s", "AATSC6s",
+            "AATSC7s", "AATSC8s", "AATSC0Z", "AATSC1Z", "AATSC2Z", "AATSC3Z", "AATSC4Z", "AATSC5Z", "AATSC6Z", "AATSC7Z",
+            "AATSC8Z", "AATSC0m", "AATSC1m", "AATSC2m", "AATSC3m", "AATSC4m", "AATSC5m", "AATSC6m", "AATSC7m", "AATSC8m",
+            "AATSC0v", "AATSC1v", "AATSC2v", "AATSC3v", "AATSC4v", "AATSC5v", "AATSC6v", "AATSC7v", "AATSC8v", "AATSC0se",
+            "AATSC1se", "AATSC2se", "AATSC3se", "AATSC4se", "AATSC5se", "AATSC6se", "AATSC7se", "AATSC8se", "AATSC0pe", "AATSC1pe",
+            "AATSC2pe", "AATSC3pe", "AATSC4pe", "AATSC5pe", "AATSC6pe", "AATSC7pe", "AATSC8pe", "AATSC0are", "AATSC1are", "AATSC2are",
+            "AATSC3are", "AATSC4are", "AATSC5are", "AATSC6are", "AATSC7are", "AATSC8are", "AATSC0p", "AATSC1p", "AATSC2p", "AATSC3p",
+            "AATSC4p", "AATSC5p", "AATSC6p", "AATSC7p", "AATSC8p", "AATSC0i", "AATSC1i", "AATSC2i", "AATSC3i", "AATSC4i",
+            "AATSC5i", "AATSC6i", "AATSC7i", "AATSC8i", "MATS1c", "MATS2c", "MATS3c", "MATS4c", "MATS5c", "MATS6c",
+            "MATS7c", "MATS8c", "MATS1dv", "MATS2dv", "MATS3dv", "MATS4dv", "MATS5dv", "MATS6dv", "MATS7dv", "MATS8dv",
+            "MATS1d", "MATS2d", "MATS3d", "MATS4d", "MATS5d", "MATS6d", "MATS7d", "MATS8d", "MATS1s", "MATS2s",
+            "MATS3s", "MATS4s", "MATS5s", "MATS6s", "MATS7s", "MATS8s", "MATS1Z", "MATS2Z", "MATS3Z", "MATS4Z",
+            "MATS5Z", "MATS6Z", "MATS7Z", "MATS8Z", "MATS1m", "MATS2m", "MATS3m", "MATS4m", "MATS5m", "MATS6m",
+            "MATS7m", "MATS8m", "MATS1v", "MATS2v", "MATS3v", "MATS4v", "MATS5v", "MATS6v", "MATS7v", "MATS8v",
+            "MATS1se", "MATS2se", "MATS3se", "MATS4se", "MATS5se", "MATS6se", "MATS7se", "MATS8se", "MATS1pe", "MATS2pe",
+            "MATS3pe", "MATS4pe", "MATS5pe", "MATS6pe", "MATS7pe", "MATS8pe", "MATS1are", "MATS2are", "MATS3are", "MATS4are",
+            "MATS5are", "MATS6are", "MATS7are", "MATS8are", "MATS1p", "MATS2p", "MATS3p", "MATS4p", "MATS5p", "MATS6p",
+            "MATS7p", "MATS8p", "MATS1i", "MATS2i", "MATS3i", "MATS4i", "MATS5i", "MATS6i", "MATS7i", "MATS8i",
+            "GATS1c", "GATS2c", "GATS3c", "GATS4c", "GATS5c", "GATS6c", "GATS7c", "GATS8c", "GATS1dv", "GATS2dv",
+            "GATS3dv", "GATS4dv", "GATS5dv", "GATS6dv", "GATS7dv", "GATS8dv", "GATS1d", "GATS2d", "GATS3d", "GATS4d",
+            "GATS5d", "GATS6d", "GATS7d", "GATS8d", "GATS1s", "GATS2s", "GATS3s", "GATS4s", "GATS5s", "GATS6s",
+            "GATS7s", "GATS8s", "GATS1Z", "GATS2Z", "GATS3Z", "GATS4Z", "GATS5Z", "GATS6Z", "GATS7Z", "GATS8Z",
+            "GATS1m", "GATS2m", "GATS3m", "GATS4m", "GATS5m", "GATS6m", "GATS7m", "GATS8m", "GATS1v", "GATS2v",
+            "GATS3v", "GATS4v", "GATS5v", "GATS6v", "GATS7v", "GATS8v", "GATS1se", "GATS2se", "GATS3se", "GATS4se",
+            "GATS5se", "GATS6se", "GATS7se", "GATS8se", "GATS1pe", "GATS2pe", "GATS3pe", "GATS4pe", "GATS5pe", "GATS6pe",
+            "GATS7pe", "GATS8pe", "GATS1are", "GATS2are", "GATS3are", "GATS4are", "GATS5are", "GATS6are", "GATS7are", "GATS8are",
+            "GATS1p", "GATS2p", "GATS3p", "GATS4p", "GATS5p", "GATS6p", "GATS7p", "GATS8p", "GATS1i", "GATS2i",
+            "GATS3i", "GATS4i", "GATS5i", "GATS6i", "GATS7i", "GATS8i"
+        });
+        // BCUT (24)
+        names.insert(names.end(), {
+            "BCUTc-1l", "BCUTc-1h", "BCUTdv-1l", "BCUTdv-1h", "BCUTd-1l", "BCUTd-1h", "BCUTs-1l", "BCUTs-1h", "BCUTZ-1l", "BCUTZ-1h",
+            "BCUTm-1l", "BCUTm-1h", "BCUTv-1l", "BCUTv-1h", "BCUTse-1l", "BCUTse-1h", "BCUTpe-1l", "BCUTpe-1h", "BCUTare-1l", "BCUTare-1h",
+            "BCUTp-1l", "BCUTp-1h", "BCUTi-1l", "BCUTi-1h"
+        });
+        // BalabanJ (1)
+        names.insert(names.end(), {"J"});
+        // BaryszMatrix (104)
+        names.insert(names.end(), {
+            "SpAbs_DzZ", "SpMax_DzZ", "SpDiam_DzZ", "SpAD_DzZ", "SpMAD_DzZ", "LogEE_DzZ", "SM1_DzZ", "VE1_DzZ", "VE2_DzZ", "VE3_DzZ",
+            "VR1_DzZ", "VR2_DzZ", "VR3_DzZ", "SpAbs_Dzm", "SpMax_Dzm", "SpDiam_Dzm", "SpAD_Dzm", "SpMAD_Dzm", "LogEE_Dzm", "SM1_Dzm",
+            "VE1_Dzm", "VE2_Dzm", "VE3_Dzm", "VR1_Dzm", "VR2_Dzm", "VR3_Dzm", "SpAbs_Dzv", "SpMax_Dzv", "SpDiam_Dzv", "SpAD_Dzv",
+            "SpMAD_Dzv", "LogEE_Dzv", "SM1_Dzv", "VE1_Dzv", "VE2_Dzv", "VE3_Dzv", "VR1_Dzv", "VR2_Dzv", "VR3_Dzv", "SpAbs_Dzse",
+            "SpMax_Dzse", "SpDiam_Dzse", "SpAD_Dzse", "SpMAD_Dzse", "LogEE_Dzse", "SM1_Dzse", "VE1_Dzse", "VE2_Dzse", "VE3_Dzse", "VR1_Dzse",
+            "VR2_Dzse", "VR3_Dzse", "SpAbs_Dzpe", "SpMax_Dzpe", "SpDiam_Dzpe", "SpAD_Dzpe", "SpMAD_Dzpe", "LogEE_Dzpe", "SM1_Dzpe", "VE1_Dzpe",
+            "VE2_Dzpe", "VE3_Dzpe", "VR1_Dzpe", "VR2_Dzpe", "VR3_Dzpe", "SpAbs_Dzare", "SpMax_Dzare", "SpDiam_Dzare", "SpAD_Dzare", "SpMAD_Dzare",
+            "LogEE_Dzare", "SM1_Dzare", "VE1_Dzare", "VE2_Dzare", "VE3_Dzare", "VR1_Dzare", "VR2_Dzare", "VR3_Dzare", "SpAbs_Dzp", "SpMax_Dzp",
+            "SpDiam_Dzp", "SpAD_Dzp", "SpMAD_Dzp", "LogEE_Dzp", "SM1_Dzp", "VE1_Dzp", "VE2_Dzp", "VE3_Dzp", "VR1_Dzp", "VR2_Dzp",
+            "VR3_Dzp", "SpAbs_Dzi", "SpMax_Dzi", "SpDiam_Dzi", "SpAD_Dzi", "SpMAD_Dzi", "LogEE_Dzi", "SM1_Dzi", "VE1_Dzi", "VE2_Dzi",
+            "VE3_Dzi", "VR1_Dzi", "VR2_Dzi", "VR3_Dzi"
+        });
+        // BertzCT (1)
+        names.insert(names.end(), {"BertzCT"});
+        // BondCount (9)
+        names.insert(names.end(), {"nBonds", "nBondsO", "nBondsS", "nBondsD", "nBondsT", "nBondsA", "nBondsM", "nBondsKS", "nBondsKD"});
+        // RNCGRPCG (2)
+        names.insert(names.end(), {"RNCG", "RPCG"});
+        // CarbonTypes (11)
+        names.insert(names.end(), {
+            "C1SP1", "C2SP1", "C1SP2", "C2SP2", "C3SP2", "C1SP3", "C2SP3", "C3SP3", "C4SP3", "HybRatio",
+            "FCSP3"
+        });
+        // Chi (56)
+        names.insert(names.end(), {
+            "Xch-3d", "Xch-4d", "Xch-5d", "Xch-6d", "Xch-7d", "Xch-3dv", "Xch-4dv", "Xch-5dv", "Xch-6dv", "Xch-7dv",
+            "Xc-3d", "Xc-4d", "Xc-5d", "Xc-6d", "Xc-3dv", "Xc-4dv", "Xc-5dv", "Xc-6dv", "Xpc-4d", "Xpc-5d",
+            "Xpc-6d", "Xpc-4dv", "Xpc-5dv", "Xpc-6dv", "Xp-0d", "Xp-1d", "Xp-2d", "Xp-3d", "Xp-4d", "Xp-5d",
+            "Xp-6d", "Xp-7d", "AXp-0d", "AXp-1d", "AXp-2d", "AXp-3d", "AXp-4d", "AXp-5d", "AXp-6d", "AXp-7d",
+            "Xp-0dv", "Xp-1dv", "Xp-2dv", "Xp-3dv", "Xp-4dv", "Xp-5dv", "Xp-6dv", "Xp-7dv", "AXp-0dv", "AXp-1dv",
+            "AXp-2dv", "AXp-3dv", "AXp-4dv", "AXp-5dv", "AXp-6dv", "AXp-7dv"
+        });
+        // Constitutional (16)
+        names.insert(names.end(), {
+            "SZ", "Sm", "Sv", "Sse", "Spe", "Sare", "Sp", "Si", "MZ", "Mm",
+            "Mv", "Mse", "Mpe", "Mare", "Mp", "Mi"
+        });
+        // DetourMatrix (14)
+        names.insert(names.end(), {
+            "SpAbs_Dt", "SpMax_Dt", "SpDiam_Dt", "SpAD_Dt", "SpMAD_Dt", "LogEE_Dt", "SM1_Dt", "VE1_Dt", "VE2_Dt", "VE3_Dt",
+            "VR1_Dt", "VR2_Dt", "VR3_Dt", "DetourIndex"
+        });
+        // DistanceMatrix (12)
+        names.insert(names.end(), {
+            "SpAbs_D", "SpMax_D", "SpDiam_D", "SpAD_D", "SpMAD_D", "LogEE_D", "VE1_D", "VE2_D", "VE3_D", "VR1_D",
+            "VR2_D", "VR3_D"
+        });
+        // EState (404)
+        names.insert(names.end(), {
+            "EState_1", "EState_2", "EState_3", "EState_4", "EState_5", "EState_6", "NsCH3", "EState_8", "EState_9", "EState_10",
+            "EState_11", "NaaCH", "NsssCH", "EState_14", "EState_15", "NdssC", "NaasC", "EState_18", "EState_19", "EState_20",
+            "NsNH2", "EState_22", "EState_23", "EState_24", "NaaNH", "EState_26", "EState_27", "EState_28", "NaaN", "EState_30",
+            "EState_31", "EState_32", "EState_33", "NsOH", "NdO", "EState_36", "EState_37", "EState_38", "EState_39", "EState_40",
+            "EState_41", "EState_42", "EState_43", "EState_44", "EState_45", "EState_46", "EState_47", "EState_48", "EState_49", "EState_50",
+            "EState_51", "EState_52", "EState_53", "EState_54", "EState_55", "EState_56", "EState_57", "EState_58", "EState_59", "EState_60",
+            "EState_61", "EState_62", "EState_63", "EState_64", "EState_65", "EState_66", "EState_67", "EState_68", "EState_69", "EState_70",
+            "EState_71", "EState_72", "EState_73", "EState_74", "EState_75", "EState_76", "EState_77", "EState_78", "EState_79", "EState_80",
+            "EState_81", "EState_82", "EState_83", "EState_84", "EState_85", "EState_86", "EState_87", "EState_88", "EState_89", "EState_90",
+            "EState_91", "EState_92", "EState_93", "EState_94", "EState_95", "EState_96", "EState_97", "EState_98", "EState_99", "EState_100",
+            "EState_101", "EState_102", "EState_103", "EState_104", "EState_105", "EState_106", "EState_107", "SsCH3", "EState_109", "EState_110",
+            "EState_111", "EState_112", "EState_113", "SsssCH", "EState_115", "EState_116", "SdssC", "SaasC", "EState_119", "EState_120",
+            "EState_121", "SsNH2", "EState_123", "EState_124", "EState_125", "SaaNH", "EState_127", "EState_128", "EState_129", "SaaN",
+            "EState_131", "EState_132", "EState_133", "EState_134", "SsOH", "SdO", "EState_137", "EState_138", "EState_139", "EState_140",
+            "EState_141", "EState_142", "EState_143", "EState_144", "EState_145", "EState_146", "EState_147", "EState_148", "EState_149", "EState_150",
+            "EState_151", "EState_152", "EState_153", "EState_154", "EState_155", "EState_156", "EState_157", "EState_158", "EState_159", "EState_160",
+            "EState_161", "EState_162", "EState_163", "EState_164", "EState_165", "EState_166", "EState_167", "EState_168", "EState_169", "EState_170",
+            "EState_171", "EState_172", "EState_173", "EState_174", "EState_175", "EState_176", "EState_177", "EState_178", "EState_179", "EState_180",
+            "EState_181", "EState_182", "EState_183", "EState_184", "EState_185", "EState_186", "EState_187", "EState_188", "EState_189", "EState_190",
+            "EState_191", "EState_192", "EState_193", "EState_194", "EState_195", "EState_196", "EState_197", "EState_198", "EState_199", "EState_200",
+            "EState_201", "EState_202", "EState_203", "EState_204", "EState_205", "EState_206", "EState_207", "EState_208", "EState_209", "EState_210",
+            "EState_211", "EState_212", "EState_213", "EState_214", "EState_215", "EState_216", "EState_217", "EState_218", "EState_219", "EState_220",
+            "EState_221", "EState_222", "EState_223", "EState_224", "EState_225", "EState_226", "EState_227", "EState_228", "EState_229", "EState_230",
+            "EState_231", "EState_232", "EState_233", "EState_234", "EState_235", "EState_236", "EState_237", "EState_238", "EState_239", "EState_240",
+            "EState_241", "EState_242", "EState_243", "EState_244", "EState_245", "EState_246", "EState_247", "EState_248", "EState_249", "EState_250",
+            "EState_251", "EState_252", "EState_253", "EState_254", "EState_255", "EState_256", "EState_257", "EState_258", "EState_259", "EState_260",
+            "EState_261", "EState_262", "EState_263", "EState_264", "EState_265", "EState_266", "EState_267", "EState_268", "EState_269", "EState_270",
+            "EState_271", "EState_272", "EState_273", "EState_274", "EState_275", "EState_276", "EState_277", "EState_278", "EState_279", "EState_280",
+            "EState_281", "EState_282", "EState_283", "EState_284", "EState_285", "EState_286", "EState_287", "EState_288", "EState_289", "EState_290",
+            "EState_291", "EState_292", "EState_293", "EState_294", "EState_295", "EState_296", "EState_297", "EState_298", "EState_299", "EState_300",
+            "EState_301", "EState_302", "EState_303", "EState_304", "EState_305", "EState_306", "EState_307", "EState_308", "EState_309", "EState_310",
+            "EState_311", "EState_312", "EState_313", "EState_314", "EState_315", "EState_316", "EState_317", "EState_318", "EState_319", "EState_320",
+            "EState_321", "EState_322", "EState_323", "EState_324", "EState_325", "EState_326", "EState_327", "EState_328", "EState_329", "EState_330",
+            "EState_331", "EState_332", "EState_333", "EState_334", "EState_335", "EState_336", "EState_337", "EState_338", "EState_339", "EState_340",
+            "EState_341", "EState_342", "EState_343", "EState_344", "EState_345", "EState_346", "EState_347", "EState_348", "EState_349", "EState_350",
+            "EState_351", "EState_352", "EState_353", "EState_354", "EState_355", "EState_356", "EState_357", "EState_358", "EState_359", "EState_360",
+            "EState_361", "EState_362", "EState_363", "EState_364", "EState_365", "EState_366", "EState_367", "EState_368", "EState_369", "EState_370",
+            "EState_371", "EState_372", "EState_373", "EState_374", "EState_375", "EState_376", "EState_377", "EState_378", "EState_379", "EState_380",
+            "EState_381", "EState_382", "EState_383", "EState_384", "EState_385", "EState_386", "EState_387", "EState_388", "EState_389", "EState_390",
+            "EState_391", "EState_392", "EState_393", "EState_394", "EState_395", "EState_396", "EState_397", "EState_398", "EState_399", "EState_400",
+            "EState_401", "EState_402", "EState_403", "EState_404"
+        });
+        // EccentricConnectivityIndex (1)
+        names.insert(names.end(), {"ECIndex"});
+        // ExtendedTopochemicalAtom (45)
+        names.insert(names.end(), {
+            "ETA_alpha", "AETA_alpha", "ETA_shape_p", "ETA_shape_y", "ETA_shape_x", "ETA_beta", "AETA_beta", "ETA_beta_s", "AETA_beta_s", "ETA_beta_ns",
+            "AETA_beta_ns", "ETA_beta_ns_d", "AETA_beta_ns_d", "ETA_eta", "AETA_eta", "ETA_eta_L", "AETA_eta_L", "ETA_eta_R", "AETA_eta_R", "ETA_eta_RL",
+            "AETA_eta_RL", "ETA_eta_F", "AETA_eta_F", "ETA_eta_FL", "AETA_eta_FL", "ETA_eta_B", "AETA_eta_B", "ETA_eta_BR", "AETA_eta_BR", "ETA_dAlpha_A",
+            "ETA_dAlpha_B", "ETA_epsilon_1", "ETA_epsilon_2", "ETA_epsilon_3", "ETA_epsilon_4", "ETA_epsilon_5", "ETA_dEpsilon_A", "ETA_dEpsilon_B", "ETA_dEpsilon_C", "ETA_dEpsilon_D",
+            "ETA_dBeta", "AETA_dBeta", "ETA_psi_1", "ETA_dPsi_A", "ETA_dPsi_B"
+        });
+        // FragmentComplexity (1)
+        names.insert(names.end(), {"fragCpx"});
+        // Framework (1)
+        names.insert(names.end(), {"fMF"});
+        // HydrogenBond (2)
+        names.insert(names.end(), {"nHBAcc", "nHBDon"});
+        // LogS (1)
+        names.insert(names.end(), {"FilterItLogS"});
+        // InformationContent (42)
+        names.insert(names.end(), {
+            "IC0", "IC1", "IC2", "IC3", "IC4", "IC5", "TIC0", "TIC1", "TIC2", "TIC3",
+            "TIC4", "TIC5", "SIC0", "SIC1", "SIC2", "SIC3", "SIC4", "SIC5", "BIC0", "BIC1",
+            "BIC2", "BIC3", "BIC4", "BIC5", "CIC0", "CIC1", "CIC2", "CIC3", "CIC4", "CIC5",
+            "MIC0", "MIC1", "MIC2", "MIC3", "MIC4", "MIC5", "ZMIC0", "ZMIC1", "ZMIC2", "ZMIC3",
+            "ZMIC4", "ZMIC5"
+        });
+        // KappaShapeIndex (3)
+        names.insert(names.end(), {"Kier1", "Kier2", "Kier3"});
+        // Lipinski (2)
+        names.insert(names.end(), {"Lipinski", "GhoseFilter"});
+        // McGowanVolume (1)
+        names.insert(names.end(), {"VMcGowan"});
+        // MoeType (54)
+        names.insert(names.end(), {
+            "MoeType_1", "MoeType_2", "MoeType_3", "MoeType_4", "MoeType_5", "MoeType_6", "MoeType_7", "MoeType_8", "MoeType_9", "MoeType_10",
+            "MoeType_11", "MoeType_12", "MoeType_13", "MoeType_14", "MoeType_15", "MoeType_16", "MoeType_17", "MoeType_18", "MoeType_19", "MoeType_20",
+            "MoeType_21", "MoeType_22", "MoeType_23", "MoeType_24", "MoeType_25", "MoeType_26", "MoeType_27", "MoeType_28", "MoeType_29", "MoeType_30",
+            "MoeType_31", "MoeType_32", "MoeType_33", "MoeType_34", "MoeType_35", "MoeType_36", "MoeType_37", "MoeType_38", "MoeType_39", "MoeType_40",
+            "MoeType_41", "MoeType_42", "MoeType_43", "MoeType_44", "MoeType_45", "MoeType_46", "MoeType_47", "MoeType_48", "MoeType_49", "MoeType_50",
+            "MoeType_51", "MoeType_52", "MoeType_53", "MoeType_54"
+        });
+        // MolecularDistanceEdge (19)
+        names.insert(names.end(), {
+            "MDEC-11", "MDEC-12", "MDEC-13", "MDEC-14", "MDEC-22", "MDEC-23", "MDEC-24", "MDEC-33", "MDEC-34", "MDEC-44",
+            "MDEO-11", "MDEO-12", "MDEO-22", "MDEN-11", "MDEN-12", "MDEN-13", "MDEN-22", "MDEN-23", "MDEN-33"
+        });
+        // MolecularId (12)
+        names.insert(names.end(), {
+            "MID", "AMID", "MID_h", "AMID_h", "MID_C", "AMID_C", "MID_N", "AMID_N", "MID_O", "AMID_O",
+            "MID_X", "AMID_X"
+        });
+        // PathCount (21)
+        names.insert(names.end(), {
+            "MPC2", "MPC3", "MPC4", "MPC5", "MPC6", "MPC7", "MPC8", "MPC9", "MPC10", "TMPC10",
+            "piPC1", "piPC2", "piPC3", "piPC4", "piPC5", "piPC6", "piPC7", "piPC8", "piPC9", "piPC10",
+            "TpiPC10"
+        });
+        // Polarizability (2)
+        names.insert(names.end(), {"apol78", "bpol78"});
+        // RingCount (138)
+        names.insert(names.end(), {
+            "nRing", "n3Ring", "n4Ring", "n5Ring", "n6Ring", "n7Ring", "n8Ring", "n9Ring", "n10Ring", "n11Ring",
+            "n12Ring", "nG12Ring", "nHRing", "n3HRing", "n4HRing", "n5HRing", "n6HRing", "n7HRing", "n8HRing", "n9HRing",
+            "n10HRing", "n11HRing", "n12HRing", "nG12HRing", "naRing", "n3aRing", "n4aRing", "n5aRing", "n6aRing", "n7aRing",
+            "n8aRing", "n9aRing", "n10aRing", "n11aRing", "n12aRing", "nG12aRing", "naHRing", "n3aHRing", "n4aHRing", "n5aHRing",
+            "n6aHRing", "n7aHRing", "n8aHRing", "n9aHRing", "n10aHRing", "n11aHRing", "n12aHRing", "nG12aHRing", "nARing", "n3ARing",
+            "n4ARing", "n5ARing", "n6ARing", "n7ARing", "n8ARing", "n9ARing", "n10ARing", "n11ARing", "n12ARing", "nG12ARing",
+            "nAHRing", "n3AHRing", "n4AHRing", "n5AHRing", "n6AHRing", "n7AHRing", "n8AHRing", "n9AHRing", "n10AHRing", "n11AHRing",
+            "n12AHRing", "nG12AHRing", "nFRing", "n4FRing", "n5FRing", "n6FRing", "n7FRing", "n8FRing", "n9FRing", "n10FRing",
+            "n11FRing", "n12FRing", "nG12FRing", "nFHRing", "n4FHRing", "n5FHRing", "n6FHRing", "n7FHRing", "n8FHRing", "n9FHRing",
+            "n10FHRing", "n11FHRing", "n12FHRing", "nG12FHRing", "nFaRing", "n4FaRing", "n5FaRing", "n6FaRing", "n7FaRing", "n8FaRing",
+            "n9FaRing", "n10FaRing", "n11FaRing", "n12FaRing", "nG12FaRing", "nFaHRing", "n4FaHRing", "n5FaHRing", "n6FaHRing", "n7FaHRing",
+            "n8FaHRing", "n9FaHRing", "n10FaHRing", "n11FaHRing", "n12FaHRing", "nG12FaHRing", "nFARing", "n4FARing", "n5FARing", "n6FARing",
+            "n7FARing", "n8FARing", "n9FARing", "n10FARing", "n11FARing", "n12FARing", "nG12FARing", "nFAHRing", "n4FAHRing", "n5FAHRing",
+            "n6FAHRing", "n7FAHRing", "n8FAHRing", "n9FAHRing", "n10FAHRing", "n11FAHRing", "n12FAHRing", "nG12FAHRing"
+        });
+        // RotatableBond (2)
+        names.insert(names.end(), {"nRot", "RotRatio"});
+        // SLogP (2)
+        names.insert(names.end(), {"SLogP", "SMR"});
+        // TopoPSA (2)
+        names.insert(names.end(), {"TopoPSA(NO)", "TopoPSA"});
+        // TopologicalCharge (21)
+        names.insert(names.end(), {
+            "GGI1", "GGI2", "GGI3", "GGI4", "GGI5", "GGI6", "GGI7", "GGI8", "GGI9", "GGI10",
+            "JGI1", "JGI2", "JGI3", "JGI4", "JGI5", "JGI6", "JGI7", "JGI8", "JGI9", "JGI10",
+            "JGT10"
+        });
+        // TopologicalIndex (4)
+        names.insert(names.end(), {"Diameter", "Radius", "TopoShapeIndex", "PetitjeanIndex"});
+        // VdwVolumeABC (1)
+        names.insert(names.end(), {"Vabc"});
+        // VertexAdjacencyInformation (1)
+        names.insert(names.end(), {"VAdjMat"});
+        // WalkCount (21)
+        names.insert(names.end(), {
+            "MWC01", "MWC02", "MWC03", "MWC04", "MWC05", "MWC06", "MWC07", "MWC08", "MWC09", "MWC10",
+            "TMWC10", "SRW02", "SRW03", "SRW04", "SRW05", "SRW06", "SRW07", "SRW08", "SRW09", "SRW10",
+            "TSRW10"
+        });
+        // Weight (2)
+        names.insert(names.end(), {"MW", "AMW"});
+        // WienerIndex (2)
+        names.insert(names.end(), {"WPath", "WPol"});
+        // ZagrebIndex (4)
+        names.insert(names.end(), {"Zagreb1", "Zagreb2", "mZagreb1", "mZagreb2"});
+        // Pol (1)
+        names.insert(names.end(), {"Pol"});
+        // MR (1)
+        names.insert(names.end(), {"MR"});
+        // Flexibility (1)
+        names.insert(names.end(), {"Flexibility"});
+        // Schultz (1)
+        names.insert(names.end(), {"Schultz"});
+        // AlphaKappaShapeIndex (3)
+        names.insert(names.end(), {"KierAlpha1", "KierAlpha2", "KierAlpha3"});
+        // HEState (88)
+        names.insert(names.end(), {
+            "HEState_1", "HEState_2", "HEState_3", "HEState_4", "HEState_5", "HEState_6", "HEState_7", "HEState_8", "HEState_9", "HEState_10",
+            "HEState_11", "HEState_12", "HEState_13", "HEState_14", "HEState_15", "HEState_16", "HEState_17", "HEState_18", "HEState_19", "HEState_20",
+            "HEState_21", "HEState_22", "HEState_23", "HEState_24", "HEState_25", "HEState_26", "HEState_27", "HEState_28", "HEState_29", "HEState_30",
+            "HEState_31", "HEState_32", "HEState_33", "HEState_34", "HEState_35", "HEState_36", "HEState_37", "HEState_38", "HEState_39", "HEState_40",
+            "HEState_41", "HEState_42", "HEState_43", "HEState_44", "HEState_45", "HEState_46", "HEState_47", "HEState_48", "HEState_49", "HEState_50",
+            "HEState_51", "HEState_52", "HEState_53", "HEState_54", "HEState_55", "HEState_56", "HEState_57", "HEState_58", "HEState_59", "HEState_60",
+            "HEState_61", "HEState_62", "HEState_63", "HEState_64", "HEState_65", "HEState_66", "HEState_67", "HEState_68", "HEState_69", "HEState_70",
+            "HEState_71", "HEState_72", "HEState_73", "HEState_74", "HEState_75", "HEState_76", "HEState_77", "HEState_78", "HEState_79", "HEState_80",
+            "HEState_81", "HEState_82", "HEState_83", "HEState_84", "HEState_85", "HEState_86", "HEState_87", "HEState_88"
+        });
+        // BEState (1460)
+        names.insert(names.end(), {
+            "BEState_1", "BEState_2", "BEState_3", "BEState_4", "BEState_5", "BEState_6", "BEState_7", "BEState_8", "BEState_9", "BEState_10",
+            "BEState_11", "BEState_12", "BEState_13", "BEState_14", "BEState_15", "BEState_16", "BEState_17", "BEState_18", "BEState_19", "BEState_20",
+            "BEState_21", "BEState_22", "BEState_23", "BEState_24", "BEState_25", "BEState_26", "BEState_27", "BEState_28", "BEState_29", "BEState_30",
+            "BEState_31", "BEState_32", "BEState_33", "BEState_34", "BEState_35", "BEState_36", "BEState_37", "BEState_38", "BEState_39", "BEState_40",
+            "BEState_41", "BEState_42", "BEState_43", "BEState_44", "BEState_45", "BEState_46", "BEState_47", "BEState_48", "BEState_49", "BEState_50",
+            "BEState_51", "BEState_52", "BEState_53", "BEState_54", "BEState_55", "BEState_56", "BEState_57", "BEState_58", "BEState_59", "BEState_60",
+            "BEState_61", "BEState_62", "BEState_63", "BEState_64", "BEState_65", "BEState_66", "BEState_67", "BEState_68", "BEState_69", "BEState_70",
+            "BEState_71", "BEState_72", "BEState_73", "BEState_74", "BEState_75", "BEState_76", "BEState_77", "BEState_78", "BEState_79", "BEState_80",
+            "BEState_81", "BEState_82", "BEState_83", "BEState_84", "BEState_85", "BEState_86", "BEState_87", "BEState_88", "BEState_89", "BEState_90",
+            "BEState_91", "BEState_92", "BEState_93", "BEState_94", "BEState_95", "BEState_96", "BEState_97", "BEState_98", "BEState_99", "BEState_100",
+            "BEState_101", "BEState_102", "BEState_103", "BEState_104", "BEState_105", "BEState_106", "BEState_107", "BEState_108", "BEState_109", "BEState_110",
+            "BEState_111", "BEState_112", "BEState_113", "BEState_114", "BEState_115", "BEState_116", "BEState_117", "BEState_118", "BEState_119", "BEState_120",
+            "BEState_121", "BEState_122", "BEState_123", "BEState_124", "BEState_125", "BEState_126", "BEState_127", "BEState_128", "BEState_129", "BEState_130",
+            "BEState_131", "BEState_132", "BEState_133", "BEState_134", "BEState_135", "BEState_136", "BEState_137", "BEState_138", "BEState_139", "BEState_140",
+            "BEState_141", "BEState_142", "BEState_143", "BEState_144", "BEState_145", "BEState_146", "BEState_147", "BEState_148", "BEState_149", "BEState_150",
+            "BEState_151", "BEState_152", "BEState_153", "BEState_154", "BEState_155", "BEState_156", "BEState_157", "BEState_158", "BEState_159", "BEState_160",
+            "BEState_161", "BEState_162", "BEState_163", "BEState_164", "BEState_165", "BEState_166", "BEState_167", "BEState_168", "BEState_169", "BEState_170",
+            "BEState_171", "BEState_172", "BEState_173", "BEState_174", "BEState_175", "BEState_176", "BEState_177", "BEState_178", "BEState_179", "BEState_180",
+            "BEState_181", "BEState_182", "BEState_183", "BEState_184", "BEState_185", "BEState_186", "BEState_187", "BEState_188", "BEState_189", "BEState_190",
+            "BEState_191", "BEState_192", "BEState_193", "BEState_194", "BEState_195", "BEState_196", "BEState_197", "BEState_198", "BEState_199", "BEState_200",
+            "BEState_201", "BEState_202", "BEState_203", "BEState_204", "BEState_205", "BEState_206", "BEState_207", "BEState_208", "BEState_209", "BEState_210",
+            "BEState_211", "BEState_212", "BEState_213", "BEState_214", "BEState_215", "BEState_216", "BEState_217", "BEState_218", "BEState_219", "BEState_220",
+            "BEState_221", "BEState_222", "BEState_223", "BEState_224", "BEState_225", "BEState_226", "BEState_227", "BEState_228", "BEState_229", "BEState_230",
+            "BEState_231", "BEState_232", "BEState_233", "BEState_234", "BEState_235", "BEState_236", "BEState_237", "BEState_238", "BEState_239", "BEState_240",
+            "BEState_241", "BEState_242", "BEState_243", "BEState_244", "BEState_245", "BEState_246", "BEState_247", "BEState_248", "BEState_249", "BEState_250",
+            "BEState_251", "BEState_252", "BEState_253", "BEState_254", "BEState_255", "BEState_256", "BEState_257", "BEState_258", "BEState_259", "BEState_260",
+            "BEState_261", "BEState_262", "BEState_263", "BEState_264", "BEState_265", "BEState_266", "BEState_267", "BEState_268", "BEState_269", "BEState_270",
+            "BEState_271", "BEState_272", "BEState_273", "BEState_274", "BEState_275", "BEState_276", "BEState_277", "BEState_278", "BEState_279", "BEState_280",
+            "BEState_281", "BEState_282", "BEState_283", "BEState_284", "BEState_285", "BEState_286", "BEState_287", "BEState_288", "BEState_289", "BEState_290",
+            "BEState_291", "BEState_292", "BEState_293", "BEState_294", "BEState_295", "BEState_296", "BEState_297", "BEState_298", "BEState_299", "BEState_300",
+            "BEState_301", "BEState_302", "BEState_303", "BEState_304", "BEState_305", "BEState_306", "BEState_307", "BEState_308", "BEState_309", "BEState_310",
+            "BEState_311", "BEState_312", "BEState_313", "BEState_314", "BEState_315", "BEState_316", "BEState_317", "BEState_318", "BEState_319", "BEState_320",
+            "BEState_321", "BEState_322", "BEState_323", "BEState_324", "BEState_325", "BEState_326", "BEState_327", "BEState_328", "BEState_329", "BEState_330",
+            "BEState_331", "BEState_332", "BEState_333", "BEState_334", "BEState_335", "BEState_336", "BEState_337", "BEState_338", "BEState_339", "BEState_340",
+            "BEState_341", "BEState_342", "BEState_343", "BEState_344", "BEState_345", "BEState_346", "BEState_347", "BEState_348", "BEState_349", "BEState_350",
+            "BEState_351", "BEState_352", "BEState_353", "BEState_354", "BEState_355", "BEState_356", "BEState_357", "BEState_358", "BEState_359", "BEState_360",
+            "BEState_361", "BEState_362", "BEState_363", "BEState_364", "BEState_365", "BEState_366", "BEState_367", "BEState_368", "BEState_369", "BEState_370",
+            "BEState_371", "BEState_372", "BEState_373", "BEState_374", "BEState_375", "BEState_376", "BEState_377", "BEState_378", "BEState_379", "BEState_380",
+            "BEState_381", "BEState_382", "BEState_383", "BEState_384", "BEState_385", "BEState_386", "BEState_387", "BEState_388", "BEState_389", "BEState_390",
+            "BEState_391", "BEState_392", "BEState_393", "BEState_394", "BEState_395", "BEState_396", "BEState_397", "BEState_398", "BEState_399", "BEState_400",
+            "BEState_401", "BEState_402", "BEState_403", "BEState_404", "BEState_405", "BEState_406", "BEState_407", "BEState_408", "BEState_409", "BEState_410",
+            "BEState_411", "BEState_412", "BEState_413", "BEState_414", "BEState_415", "BEState_416", "BEState_417", "BEState_418", "BEState_419", "BEState_420",
+            "BEState_421", "BEState_422", "BEState_423", "BEState_424", "BEState_425", "BEState_426", "BEState_427", "BEState_428", "BEState_429", "BEState_430",
+            "BEState_431", "BEState_432", "BEState_433", "BEState_434", "BEState_435", "BEState_436", "BEState_437", "BEState_438", "BEState_439", "BEState_440",
+            "BEState_441", "BEState_442", "BEState_443", "BEState_444", "BEState_445", "BEState_446", "BEState_447", "BEState_448", "BEState_449", "BEState_450",
+            "BEState_451", "BEState_452", "BEState_453", "BEState_454", "BEState_455", "BEState_456", "BEState_457", "BEState_458", "BEState_459", "BEState_460",
+            "BEState_461", "BEState_462", "BEState_463", "BEState_464", "BEState_465", "BEState_466", "BEState_467", "BEState_468", "BEState_469", "BEState_470",
+            "BEState_471", "BEState_472", "BEState_473", "BEState_474", "BEState_475", "BEState_476", "BEState_477", "BEState_478", "BEState_479", "BEState_480",
+            "BEState_481", "BEState_482", "BEState_483", "BEState_484", "BEState_485", "BEState_486", "BEState_487", "BEState_488", "BEState_489", "BEState_490",
+            "BEState_491", "BEState_492", "BEState_493", "BEState_494", "BEState_495", "BEState_496", "BEState_497", "BEState_498", "BEState_499", "BEState_500",
+            "BEState_501", "BEState_502", "BEState_503", "BEState_504", "BEState_505", "BEState_506", "BEState_507", "BEState_508", "BEState_509", "BEState_510",
+            "BEState_511", "BEState_512", "BEState_513", "BEState_514", "BEState_515", "BEState_516", "BEState_517", "BEState_518", "BEState_519", "BEState_520",
+            "BEState_521", "BEState_522", "BEState_523", "BEState_524", "BEState_525", "BEState_526", "BEState_527", "BEState_528", "BEState_529", "BEState_530",
+            "BEState_531", "BEState_532", "BEState_533", "BEState_534", "BEState_535", "BEState_536", "BEState_537", "BEState_538", "BEState_539", "BEState_540",
+            "BEState_541", "BEState_542", "BEState_543", "BEState_544", "BEState_545", "BEState_546", "BEState_547", "BEState_548", "BEState_549", "BEState_550",
+            "BEState_551", "BEState_552", "BEState_553", "BEState_554", "BEState_555", "BEState_556", "BEState_557", "BEState_558", "BEState_559", "BEState_560",
+            "BEState_561", "BEState_562", "BEState_563", "BEState_564", "BEState_565", "BEState_566", "BEState_567", "BEState_568", "BEState_569", "BEState_570",
+            "BEState_571", "BEState_572", "BEState_573", "BEState_574", "BEState_575", "BEState_576", "BEState_577", "BEState_578", "BEState_579", "BEState_580",
+            "BEState_581", "BEState_582", "BEState_583", "BEState_584", "BEState_585", "BEState_586", "BEState_587", "BEState_588", "BEState_589", "BEState_590",
+            "BEState_591", "BEState_592", "BEState_593", "BEState_594", "BEState_595", "BEState_596", "BEState_597", "BEState_598", "BEState_599", "BEState_600",
+            "BEState_601", "BEState_602", "BEState_603", "BEState_604", "BEState_605", "BEState_606", "BEState_607", "BEState_608", "BEState_609", "BEState_610",
+            "BEState_611", "BEState_612", "BEState_613", "BEState_614", "BEState_615", "BEState_616", "BEState_617", "BEState_618", "BEState_619", "BEState_620",
+            "BEState_621", "BEState_622", "BEState_623", "BEState_624", "BEState_625", "BEState_626", "BEState_627", "BEState_628", "BEState_629", "BEState_630",
+            "BEState_631", "BEState_632", "BEState_633", "BEState_634", "BEState_635", "BEState_636", "BEState_637", "BEState_638", "BEState_639", "BEState_640",
+            "BEState_641", "BEState_642", "BEState_643", "BEState_644", "BEState_645", "BEState_646", "BEState_647", "BEState_648", "BEState_649", "BEState_650",
+            "BEState_651", "BEState_652", "BEState_653", "BEState_654", "BEState_655", "BEState_656", "BEState_657", "BEState_658", "BEState_659", "BEState_660",
+            "BEState_661", "BEState_662", "BEState_663", "BEState_664", "BEState_665", "BEState_666", "BEState_667", "BEState_668", "BEState_669", "BEState_670",
+            "BEState_671", "BEState_672", "BEState_673", "BEState_674", "BEState_675", "BEState_676", "BEState_677", "BEState_678", "BEState_679", "BEState_680",
+            "BEState_681", "BEState_682", "BEState_683", "BEState_684", "BEState_685", "BEState_686", "BEState_687", "BEState_688", "BEState_689", "BEState_690",
+            "BEState_691", "BEState_692", "BEState_693", "BEState_694", "BEState_695", "BEState_696", "BEState_697", "BEState_698", "BEState_699", "BEState_700",
+            "BEState_701", "BEState_702", "BEState_703", "BEState_704", "BEState_705", "BEState_706", "BEState_707", "BEState_708", "BEState_709", "BEState_710",
+            "BEState_711", "BEState_712", "BEState_713", "BEState_714", "BEState_715", "BEState_716", "BEState_717", "BEState_718", "BEState_719", "BEState_720",
+            "BEState_721", "BEState_722", "BEState_723", "BEState_724", "BEState_725", "BEState_726", "BEState_727", "BEState_728", "BEState_729", "BEState_730",
+            "BEState_731", "BEState_732", "BEState_733", "BEState_734", "BEState_735", "BEState_736", "BEState_737", "BEState_738", "BEState_739", "BEState_740",
+            "BEState_741", "BEState_742", "BEState_743", "BEState_744", "BEState_745", "BEState_746", "BEState_747", "BEState_748", "BEState_749", "BEState_750",
+            "BEState_751", "BEState_752", "BEState_753", "BEState_754", "BEState_755", "BEState_756", "BEState_757", "BEState_758", "BEState_759", "BEState_760",
+            "BEState_761", "BEState_762", "BEState_763", "BEState_764", "BEState_765", "BEState_766", "BEState_767", "BEState_768", "BEState_769", "BEState_770",
+            "BEState_771", "BEState_772", "BEState_773", "BEState_774", "BEState_775", "BEState_776", "BEState_777", "BEState_778", "BEState_779", "BEState_780",
+            "BEState_781", "BEState_782", "BEState_783", "BEState_784", "BEState_785", "BEState_786", "BEState_787", "BEState_788", "BEState_789", "BEState_790",
+            "BEState_791", "BEState_792", "BEState_793", "BEState_794", "BEState_795", "BEState_796", "BEState_797", "BEState_798", "BEState_799", "BEState_800",
+            "BEState_801", "BEState_802", "BEState_803", "BEState_804", "BEState_805", "BEState_806", "BEState_807", "BEState_808", "BEState_809", "BEState_810",
+            "BEState_811", "BEState_812", "BEState_813", "BEState_814", "BEState_815", "BEState_816", "BEState_817", "BEState_818", "BEState_819", "BEState_820",
+            "BEState_821", "BEState_822", "BEState_823", "BEState_824", "BEState_825", "BEState_826", "BEState_827", "BEState_828", "BEState_829", "BEState_830",
+            "BEState_831", "BEState_832", "BEState_833", "BEState_834", "BEState_835", "BEState_836", "BEState_837", "BEState_838", "BEState_839", "BEState_840",
+            "BEState_841", "BEState_842", "BEState_843", "BEState_844", "BEState_845", "BEState_846", "BEState_847", "BEState_848", "BEState_849", "BEState_850",
+            "BEState_851", "BEState_852", "BEState_853", "BEState_854", "BEState_855", "BEState_856", "BEState_857", "BEState_858", "BEState_859", "BEState_860",
+            "BEState_861", "BEState_862", "BEState_863", "BEState_864", "BEState_865", "BEState_866", "BEState_867", "BEState_868", "BEState_869", "BEState_870",
+            "BEState_871", "BEState_872", "BEState_873", "BEState_874", "BEState_875", "BEState_876", "BEState_877", "BEState_878", "BEState_879", "BEState_880",
+            "BEState_881", "BEState_882", "BEState_883", "BEState_884", "BEState_885", "BEState_886", "BEState_887", "BEState_888", "BEState_889", "BEState_890",
+            "BEState_891", "BEState_892", "BEState_893", "BEState_894", "BEState_895", "BEState_896", "BEState_897", "BEState_898", "BEState_899", "BEState_900",
+            "BEState_901", "BEState_902", "BEState_903", "BEState_904", "BEState_905", "BEState_906", "BEState_907", "BEState_908", "BEState_909", "BEState_910",
+            "BEState_911", "BEState_912", "BEState_913", "BEState_914", "BEState_915", "BEState_916", "BEState_917", "BEState_918", "BEState_919", "BEState_920",
+            "BEState_921", "BEState_922", "BEState_923", "BEState_924", "BEState_925", "BEState_926", "BEState_927", "BEState_928", "BEState_929", "BEState_930",
+            "BEState_931", "BEState_932", "BEState_933", "BEState_934", "BEState_935", "BEState_936", "BEState_937", "BEState_938", "BEState_939", "BEState_940",
+            "BEState_941", "BEState_942", "BEState_943", "BEState_944", "BEState_945", "BEState_946", "BEState_947", "BEState_948", "BEState_949", "BEState_950",
+            "BEState_951", "BEState_952", "BEState_953", "BEState_954", "BEState_955", "BEState_956", "BEState_957", "BEState_958", "BEState_959", "BEState_960",
+            "BEState_961", "BEState_962", "BEState_963", "BEState_964", "BEState_965", "BEState_966", "BEState_967", "BEState_968", "BEState_969", "BEState_970",
+            "BEState_971", "BEState_972", "BEState_973", "BEState_974", "BEState_975", "BEState_976", "BEState_977", "BEState_978", "BEState_979", "BEState_980",
+            "BEState_981", "BEState_982", "BEState_983", "BEState_984", "BEState_985", "BEState_986", "BEState_987", "BEState_988", "BEState_989", "BEState_990",
+            "BEState_991", "BEState_992", "BEState_993", "BEState_994", "BEState_995", "BEState_996", "BEState_997", "BEState_998", "BEState_999", "BEState_1000",
+            "BEState_1001", "BEState_1002", "BEState_1003", "BEState_1004", "BEState_1005", "BEState_1006", "BEState_1007", "BEState_1008", "BEState_1009", "BEState_1010",
+            "BEState_1011", "BEState_1012", "BEState_1013", "BEState_1014", "BEState_1015", "BEState_1016", "BEState_1017", "BEState_1018", "BEState_1019", "BEState_1020",
+            "BEState_1021", "BEState_1022", "BEState_1023", "BEState_1024", "BEState_1025", "BEState_1026", "BEState_1027", "BEState_1028", "BEState_1029", "BEState_1030",
+            "BEState_1031", "BEState_1032", "BEState_1033", "BEState_1034", "BEState_1035", "BEState_1036", "BEState_1037", "BEState_1038", "BEState_1039", "BEState_1040",
+            "BEState_1041", "BEState_1042", "BEState_1043", "BEState_1044", "BEState_1045", "BEState_1046", "BEState_1047", "BEState_1048", "BEState_1049", "BEState_1050",
+            "BEState_1051", "BEState_1052", "BEState_1053", "BEState_1054", "BEState_1055", "BEState_1056", "BEState_1057", "BEState_1058", "BEState_1059", "BEState_1060",
+            "BEState_1061", "BEState_1062", "BEState_1063", "BEState_1064", "BEState_1065", "BEState_1066", "BEState_1067", "BEState_1068", "BEState_1069", "BEState_1070",
+            "BEState_1071", "BEState_1072", "BEState_1073", "BEState_1074", "BEState_1075", "BEState_1076", "BEState_1077", "BEState_1078", "BEState_1079", "BEState_1080",
+            "BEState_1081", "BEState_1082", "BEState_1083", "BEState_1084", "BEState_1085", "BEState_1086", "BEState_1087", "BEState_1088", "BEState_1089", "BEState_1090",
+            "BEState_1091", "BEState_1092", "BEState_1093", "BEState_1094", "BEState_1095", "BEState_1096", "BEState_1097", "BEState_1098", "BEState_1099", "BEState_1100",
+            "BEState_1101", "BEState_1102", "BEState_1103", "BEState_1104", "BEState_1105", "BEState_1106", "BEState_1107", "BEState_1108", "BEState_1109", "BEState_1110",
+            "BEState_1111", "BEState_1112", "BEState_1113", "BEState_1114", "BEState_1115", "BEState_1116", "BEState_1117", "BEState_1118", "BEState_1119", "BEState_1120",
+            "BEState_1121", "BEState_1122", "BEState_1123", "BEState_1124", "BEState_1125", "BEState_1126", "BEState_1127", "BEState_1128", "BEState_1129", "BEState_1130",
+            "BEState_1131", "BEState_1132", "BEState_1133", "BEState_1134", "BEState_1135", "BEState_1136", "BEState_1137", "BEState_1138", "BEState_1139", "BEState_1140",
+            "BEState_1141", "BEState_1142", "BEState_1143", "BEState_1144", "BEState_1145", "BEState_1146", "BEState_1147", "BEState_1148", "BEState_1149", "BEState_1150",
+            "BEState_1151", "BEState_1152", "BEState_1153", "BEState_1154", "BEState_1155", "BEState_1156", "BEState_1157", "BEState_1158", "BEState_1159", "BEState_1160",
+            "BEState_1161", "BEState_1162", "BEState_1163", "BEState_1164", "BEState_1165", "BEState_1166", "BEState_1167", "BEState_1168", "BEState_1169", "BEState_1170",
+            "BEState_1171", "BEState_1172", "BEState_1173", "BEState_1174", "BEState_1175", "BEState_1176", "BEState_1177", "BEState_1178", "BEState_1179", "BEState_1180",
+            "BEState_1181", "BEState_1182", "BEState_1183", "BEState_1184", "BEState_1185", "BEState_1186", "BEState_1187", "BEState_1188", "BEState_1189", "BEState_1190",
+            "BEState_1191", "BEState_1192", "BEState_1193", "BEState_1194", "BEState_1195", "BEState_1196", "BEState_1197", "BEState_1198", "BEState_1199", "BEState_1200",
+            "BEState_1201", "BEState_1202", "BEState_1203", "BEState_1204", "BEState_1205", "BEState_1206", "BEState_1207", "BEState_1208", "BEState_1209", "BEState_1210",
+            "BEState_1211", "BEState_1212", "BEState_1213", "BEState_1214", "BEState_1215", "BEState_1216", "BEState_1217", "BEState_1218", "BEState_1219", "BEState_1220",
+            "BEState_1221", "BEState_1222", "BEState_1223", "BEState_1224", "BEState_1225", "BEState_1226", "BEState_1227", "BEState_1228", "BEState_1229", "BEState_1230",
+            "BEState_1231", "BEState_1232", "BEState_1233", "BEState_1234", "BEState_1235", "BEState_1236", "BEState_1237", "BEState_1238", "BEState_1239", "BEState_1240",
+            "BEState_1241", "BEState_1242", "BEState_1243", "BEState_1244", "BEState_1245", "BEState_1246", "BEState_1247", "BEState_1248", "BEState_1249", "BEState_1250",
+            "BEState_1251", "BEState_1252", "BEState_1253", "BEState_1254", "BEState_1255", "BEState_1256", "BEState_1257", "BEState_1258", "BEState_1259", "BEState_1260",
+            "BEState_1261", "BEState_1262", "BEState_1263", "BEState_1264", "BEState_1265", "BEState_1266", "BEState_1267", "BEState_1268", "BEState_1269", "BEState_1270",
+            "BEState_1271", "BEState_1272", "BEState_1273", "BEState_1274", "BEState_1275", "BEState_1276", "BEState_1277", "BEState_1278", "BEState_1279", "BEState_1280",
+            "BEState_1281", "BEState_1282", "BEState_1283", "BEState_1284", "BEState_1285", "BEState_1286", "BEState_1287", "BEState_1288", "BEState_1289", "BEState_1290",
+            "BEState_1291", "BEState_1292", "BEState_1293", "BEState_1294", "BEState_1295", "BEState_1296", "BEState_1297", "BEState_1298", "BEState_1299", "BEState_1300",
+            "BEState_1301", "BEState_1302", "BEState_1303", "BEState_1304", "BEState_1305", "BEState_1306", "BEState_1307", "BEState_1308", "BEState_1309", "BEState_1310",
+            "BEState_1311", "BEState_1312", "BEState_1313", "BEState_1314", "BEState_1315", "BEState_1316", "BEState_1317", "BEState_1318", "BEState_1319", "BEState_1320",
+            "BEState_1321", "BEState_1322", "BEState_1323", "BEState_1324", "BEState_1325", "BEState_1326", "BEState_1327", "BEState_1328", "BEState_1329", "BEState_1330",
+            "BEState_1331", "BEState_1332", "BEState_1333", "BEState_1334", "BEState_1335", "BEState_1336", "BEState_1337", "BEState_1338", "BEState_1339", "BEState_1340",
+            "BEState_1341", "BEState_1342", "BEState_1343", "BEState_1344", "BEState_1345", "BEState_1346", "BEState_1347", "BEState_1348", "BEState_1349", "BEState_1350",
+            "BEState_1351", "BEState_1352", "BEState_1353", "BEState_1354", "BEState_1355", "BEState_1356", "BEState_1357", "BEState_1358", "BEState_1359", "BEState_1360",
+            "BEState_1361", "BEState_1362", "BEState_1363", "BEState_1364", "BEState_1365", "BEState_1366", "BEState_1367", "BEState_1368", "BEState_1369", "BEState_1370",
+            "BEState_1371", "BEState_1372", "BEState_1373", "BEState_1374", "BEState_1375", "BEState_1376", "BEState_1377", "BEState_1378", "BEState_1379", "BEState_1380",
+            "BEState_1381", "BEState_1382", "BEState_1383", "BEState_1384", "BEState_1385", "BEState_1386", "BEState_1387", "BEState_1388", "BEState_1389", "BEState_1390",
+            "BEState_1391", "BEState_1392", "BEState_1393", "BEState_1394", "BEState_1395", "BEState_1396", "BEState_1397", "BEState_1398", "BEState_1399", "BEState_1400",
+            "BEState_1401", "BEState_1402", "BEState_1403", "BEState_1404", "BEState_1405", "BEState_1406", "BEState_1407", "BEState_1408", "BEState_1409", "BEState_1410",
+            "BEState_1411", "BEState_1412", "BEState_1413", "BEState_1414", "BEState_1415", "BEState_1416", "BEState_1417", "BEState_1418", "BEState_1419", "BEState_1420",
+            "BEState_1421", "BEState_1422", "BEState_1423", "BEState_1424", "BEState_1425", "BEState_1426", "BEState_1427", "BEState_1428", "BEState_1429", "BEState_1430",
+            "BEState_1431", "BEState_1432", "BEState_1433", "BEState_1434", "BEState_1435", "BEState_1436", "BEState_1437", "BEState_1438", "BEState_1439", "BEState_1440",
+            "BEState_1441", "BEState_1442", "BEState_1443", "BEState_1444", "BEState_1445", "BEState_1446", "BEState_1447", "BEState_1448", "BEState_1449", "BEState_1450",
+            "BEState_1451", "BEState_1452", "BEState_1453", "BEState_1454", "BEState_1455", "BEState_1456", "BEState_1457", "BEState_1458", "BEState_1459", "BEState_1460"
+        });
+        // Abrahams (6)
+        names.insert(names.end(), {"A", "B", "S", "E", "L", "V"});
+        // ANMat (25)
+        names.insert(names.end(), {
+            "ANMat_1", "ANMat_2", "ANMat_3", "ANMat_4", "ANMat_5", "ANMat_6", "ANMat_7", "ANMat_8", "ANMat_9", "ANMat_10",
+            "ANMat_11", "ANMat_12", "ANMat_13", "ANMat_14", "ANMat_15", "ANMat_16", "ANMat_17", "ANMat_18", "ANMat_19", "ANMat_20",
+            "ANMat_21", "ANMat_22", "ANMat_23", "ANMat_24", "ANMat_25"
+        });
+        // ASMat (20)
+        names.insert(names.end(), {
+            "ASMat_1", "ASMat_2", "ASMat_3", "ASMat_4", "ASMat_5", "ASMat_6", "ASMat_7", "ASMat_8", "ASMat_9", "ASMat_10",
+            "ASMat_11", "ASMat_12", "ASMat_13", "ASMat_14", "ASMat_15", "ASMat_16", "ASMat_17", "ASMat_18", "ASMat_19", "ASMat_20"
+        });
+        // AZMat (15)
+        names.insert(names.end(), {
+            "AZMat_1", "AZMat_2", "AZMat_3", "AZMat_4", "AZMat_5", "AZMat_6", "AZMat_7", "AZMat_8", "AZMat_9", "AZMat_10",
+            "AZMat_11", "AZMat_12", "AZMat_13", "AZMat_14", "AZMat_15"
+        });
+        // DSMat (20)
+        names.insert(names.end(), {
+            "DSMat_1", "DSMat_2", "DSMat_3", "DSMat_4", "DSMat_5", "DSMat_6", "DSMat_7", "DSMat_8", "DSMat_9", "DSMat_10",
+            "DSMat_11", "DSMat_12", "DSMat_13", "DSMat_14", "DSMat_15", "DSMat_16", "DSMat_17", "DSMat_18", "DSMat_19", "DSMat_20"
+        });
+        // DN2Mat (20)
+        names.insert(names.end(), {
+            "DN2Mat_1", "DN2Mat_2", "DN2Mat_3", "DN2Mat_4", "DN2Mat_5", "DN2Mat_6", "DN2Mat_7", "DN2Mat_8", "DN2Mat_9", "DN2Mat_10",
+            "DN2Mat_11", "DN2Mat_12", "DN2Mat_13", "DN2Mat_14", "DN2Mat_15", "DN2Mat_16", "DN2Mat_17", "DN2Mat_18", "DN2Mat_19", "DN2Mat_20"
+        });
+        // Frags (215)
+        names.insert(names.end(), {
+            "Frags_1", "Frags_2", "Frags_3", "Frags_4", "Frags_5", "Frags_6", "Frags_7", "Frags_8", "Frags_9", "Frags_10",
+            "Frags_11", "Frags_12", "Frags_13", "Frags_14", "Frags_15", "Frags_16", "Frags_17", "Frags_18", "Frags_19", "Frags_20",
+            "Frags_21", "Frags_22", "Frags_23", "Frags_24", "Frags_25", "Frags_26", "Frags_27", "Frags_28", "Frags_29", "Frags_30",
+            "Frags_31", "Frags_32", "Frags_33", "Frags_34", "Frags_35", "Frags_36", "Frags_37", "Frags_38", "Frags_39", "Frags_40",
+            "Frags_41", "Frags_42", "Frags_43", "Frags_44", "Frags_45", "Frags_46", "Frags_47", "Frags_48", "Frags_49", "Frags_50",
+            "Frags_51", "Frags_52", "Frags_53", "Frags_54", "Frags_55", "Frags_56", "Frags_57", "Frags_58", "Frags_59", "Frags_60",
+            "Frags_61", "Frags_62", "Frags_63", "Frags_64", "Frags_65", "Frags_66", "Frags_67", "Frags_68", "Frags_69", "Frags_70",
+            "Frags_71", "Frags_72", "Frags_73", "Frags_74", "Frags_75", "Frags_76", "Frags_77", "Frags_78", "Frags_79", "Frags_80",
+            "Frags_81", "Frags_82", "Frags_83", "Frags_84", "Frags_85", "Frags_86", "Frags_87", "Frags_88", "Frags_89", "Frags_90",
+            "Frags_91", "Frags_92", "Frags_93", "Frags_94", "Frags_95", "Frags_96", "Frags_97", "Frags_98", "Frags_99", "Frags_100",
+            "Frags_101", "Frags_102", "Frags_103", "Frags_104", "Frags_105", "Frags_106", "Frags_107", "Frags_108", "Frags_109", "Frags_110",
+            "Frags_111", "Frags_112", "Frags_113", "Frags_114", "Frags_115", "Frags_116", "Frags_117", "Frags_118", "Frags_119", "Frags_120",
+            "Frags_121", "Frags_122", "Frags_123", "Frags_124", "Frags_125", "Frags_126", "Frags_127", "Frags_128", "Frags_129", "Frags_130",
+            "Frags_131", "Frags_132", "Frags_133", "Frags_134", "Frags_135", "Frags_136", "Frags_137", "Frags_138", "Frags_139", "Frags_140",
+            "Frags_141", "Frags_142", "Frags_143", "Frags_144", "Frags_145", "Frags_146", "Frags_147", "Frags_148", "Frags_149", "Frags_150",
+            "Frags_151", "Frags_152", "Frags_153", "Frags_154", "Frags_155", "Frags_156", "Frags_157", "Frags_158", "Frags_159", "Frags_160",
+            "Frags_161", "Frags_162", "Frags_163", "Frags_164", "Frags_165", "Frags_166", "Frags_167", "Frags_168", "Frags_169", "Frags_170",
+            "Frags_171", "Frags_172", "Frags_173", "Frags_174", "Frags_175", "Frags_176", "Frags_177", "Frags_178", "Frags_179", "Frags_180",
+            "Frags_181", "Frags_182", "Frags_183", "Frags_184", "Frags_185", "Frags_186", "Frags_187", "Frags_188", "Frags_189", "Frags_190",
+            "Frags_191", "Frags_192", "Frags_193", "Frags_194", "Frags_195", "Frags_196", "Frags_197", "Frags_198", "Frags_199", "Frags_200",
+            "Frags_201", "Frags_202", "Frags_203", "Frags_204", "Frags_205", "Frags_206", "Frags_207", "Frags_208", "Frags_209", "Frags_210",
+            "Frags_211", "Frags_212", "Frags_213", "Frags_214", "Frags_215"
+        });
+        // AddFeatures (7)
+        names.insert(names.end(), {"nBridgedBonds", "nHydroxylPrimary", "nHydroxylSecondary", "nHydroxylTertiary", "isPolyAcid", "isPolyAlcohol", "nEndocyclicSingleBonds"});
         
         return names;
     }
