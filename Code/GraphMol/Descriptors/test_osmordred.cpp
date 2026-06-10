@@ -1150,6 +1150,27 @@ TEST_CASE("Osmordred InformationContent matches true graph-symmetry orbits (no M
   REQUIRE(std::abs(calcOsmordred(*benz)[ic5] - 1.0) < 1e-3);
 }
 
+TEST_CASE("Osmordred full descriptor width on tiny/degenerate molecules (singular-matrix solver)") {
+  // Ethylene (C=C, 2 heavy atoms) and methane (C, 1 heavy atom) yield SINGULAR
+  // weighted matrices in the ASMat/DSMat descriptors. With only dposv->dgesv the
+  // solve fails and those families return a truncated 5-element fallback, so
+  // calcOsmordred comes back SHORT (e.g. 3558 instead of 3588). The v2.0
+  // solveLinearSystem dgelss (SVD pseudo-inverse) fallback makes the solve
+  // succeed, so the full descriptor vector must be returned. Regression guard for
+  // the ethylene/methane "short vector" bug. Count is read dynamically so this
+  // passes for both v2 (3585) and v3 (3588).
+  const size_t ND = getOsmordredDescriptorNames().size();
+  REQUIRE(ND > 0);
+
+  auto ethylene = "C=C"_smiles;  // singular 2x2 weighted matrix
+  REQUIRE(ethylene != nullptr);
+  REQUIRE(calcOsmordred(*ethylene).size() == ND);
+
+  auto methane = "C"_smiles;  // degenerate 1x1
+  REQUIRE(methane != nullptr);
+  REQUIRE(calcOsmordred(*methane).size() == ND);
+}
+
 #else
 TEST_CASE("Osmordred Basic Functionality") {
   SECTION("No Osmordred support") {
