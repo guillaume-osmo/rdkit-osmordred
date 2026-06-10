@@ -320,7 +320,7 @@ TEST_CASE("Osmordred v2.0 - isMoleculeTooLarge") {
     // calcOsmordred should still work but may return NaN for some descriptors
     auto result = calcOsmordred(*mol);
     REQUIRE(!result.empty());
-    REQUIRE(result.size() == 3585);
+    REQUIRE(result.size() == 3588);
     
     delete mol;
   }
@@ -445,7 +445,7 @@ TEST_CASE("Osmordred v2.0 - checkGasteigerParameters") {
     (void)checkGasteigerParameters(*mol);  // Just verify it doesn't crash
     auto result = calcOsmordred(*mol);
     REQUIRE(!result.empty());
-    REQUIRE(result.size() == 3585);
+    REQUIRE(result.size() == 3588);
   }
   
   SECTION("Vanadium molecule - should fail Gasteiger check") {
@@ -468,7 +468,7 @@ TEST_CASE("Osmordred v2.0 - checkGasteigerParameters") {
       try {
         auto result = calcOsmordred(*mol);
         REQUIRE(!result.empty());
-        REQUIRE(result.size() == 3585);
+        REQUIRE(result.size() == 3588);
       } catch (...) {
         // If it throws, that's also acceptable for unknown atom types
         // The v2.0 fix prevents crashes in common cases
@@ -543,7 +543,7 @@ TEST_CASE("Osmordred v2.0 - Timeout and Batch Functions") {
     
     auto result = calcOsmordredWithTimeout(*mol, 60);
     REQUIRE(!result.empty());
-    REQUIRE(result.size() == 3585);
+    REQUIRE(result.size() == 3588);
     
     // Should have valid results for ethanol
     bool has_valid = false;
@@ -563,7 +563,7 @@ TEST_CASE("Osmordred v2.0 - Timeout and Batch Functions") {
     REQUIRE(results.size() == 3);
     
     for (const auto& result : results) {
-      REQUIRE(result.size() == 3585);
+      REQUIRE(result.size() == 3588);
     }
   }
   
@@ -596,7 +596,7 @@ TEST_CASE("Osmordred v2.0 - Timeout and Batch Functions") {
   
   SECTION("getOsmordredDescriptorNames") {
     auto names = getOsmordredDescriptorNames();
-    REQUIRE(names.size() == 3585);
+    REQUIRE(names.size() == 3588);
     
     // Check first few names are not empty
     REQUIRE(!names[0].empty());
@@ -703,7 +703,7 @@ TEST_CASE("Osmordred v2.0 - NCI Dataset Stress Test") {
         auto result = calcOsmordred(*mol);
         
         // Verify result size
-        REQUIRE(result.size() == 3585);
+        REQUIRE(result.size() == 3588);
         
         // Count valid (non-NaN) descriptors
         int valid_count = 0;
@@ -793,17 +793,17 @@ TEST_CASE("Osmordred v2.0 - NCI Dataset Stress Test") {
     // Should get results for all molecules
     REQUIRE(results.size() == 100);
     
-    // Each result should have correct size (3585) OR be empty (for invalid molecules)
+    // Each result should have correct size (3588) OR be empty (for invalid molecules)
     int valid_results = 0;
     int empty_results = 0;
     for (const auto& result : results) {
-      if (result.size() == 3585) {
+      if (result.size() == 3588) {
         valid_results++;
       } else if (result.empty()) {
         empty_results++;
       }
-      // Result should be either 3585 descriptors or empty (for invalid molecules)
-      REQUIRE((result.size() == 3585 || result.empty()));
+      // Result should be either 3588 descriptors or empty (for invalid molecules)
+      REQUIRE((result.size() == 3588 || result.empty()));
     }
     
     INFO("Batch results: " << valid_results << " valid, " << empty_results << " empty (invalid molecules)");
@@ -871,15 +871,15 @@ TEST_CASE("Osmordred v2.0 - NCI Dataset Stress Test") {
 
 TEST_CASE("Osmordred v2.0 - Descriptor Count Validation") {
   SECTION("Verify descriptor count matches v1.0 specification") {
-    // Osmordred should produce exactly 3585 descriptors
+    // Osmordred should produce exactly 3588 descriptors
     auto mol = "CCO"_smiles;
     REQUIRE(mol != nullptr);
     
     auto result = calcOsmordred(*mol);
-    REQUIRE(result.size() == 3585);
+    REQUIRE(result.size() == 3588);
     
     auto names = getOsmordredDescriptorNames();
-    REQUIRE(names.size() == 3585);
+    REQUIRE(names.size() == 3588);
     
     // Descriptor count should match
     REQUIRE(result.size() == names.size());
@@ -901,7 +901,7 @@ TEST_CASE("Osmordred v2.0 - Descriptor Count Validation") {
       REQUIRE(mol != nullptr);
       
       auto result = calcOsmordred(*mol);
-      REQUIRE(result.size() == 3585);
+      REQUIRE(result.size() == 3588);
       
       delete mol;
     }
@@ -963,7 +963,7 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
       }
       
       auto result = calcOsmordred(*mol);
-      if (result.size() != 3585) {
+      if (result.size() != 3588) {
         delete mol;
         continue;
       }
@@ -1046,7 +1046,7 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
         
         // Compare each descriptor value
         const auto& current_result = results_list[mol_index];
-        for (size_t desc_idx = 0; desc_idx < 3585; ++desc_idx) {
+        for (size_t desc_idx = 0; desc_idx < 3588; ++desc_idx) {
           std::string val_str;
           if (!std::getline(iss, val_str, ',')) break;
           
@@ -1100,7 +1100,7 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
       
       // Allow very small number of mismatches due to floating point platform differences
       REQUIRE(validated >= 90);
-      REQUIRE(mismatches < 50);  // Less than 0.15% mismatch rate (50 / (90 * 3585))
+      REQUIRE(mismatches < 50);  // Less than 0.15% mismatch rate (50 / (90 * 3588))
     }
   }
 }
