@@ -1105,6 +1105,51 @@ TEST_CASE("Osmordred v2.0 - NCI 1000 Golden Reference Test") {
   }
 }
 
+TEST_CASE("Osmordred InformationContent is 2D-topological, not 3D (chirality-independent)") {
+  // osmordred IC is Basak 2D graph-symmetry information content -- it must
+  // IGNORE stereochemistry. For C1C[C@@H]2CC[C@H](C1)N2 the 2D symmetry has 10
+  // orbits (IC5 = 3.1542); resolving 3D/chirality would split it to 16 orbits
+  // (IC5 = 3.9161). osmordred must give the 2D value, and it must be unchanged
+  // when the stereo tags are stripped (matches RDKit CanonicalRankAtoms,
+  // includeChirality=false).
+  auto names = getOsmordredDescriptorNames();
+  size_t ic5 = names.size();
+  for (size_t i = 0; i < names.size(); ++i)
+    if (names[i] == "IC5") { ic5 = i; break; }
+  REQUIRE(ic5 < names.size());
+
+  auto chiral = "C1C[C@@H]2CC[C@H](C1)N2"_smiles;  // bicyclic amine, 2 stereocenters
+  auto flat = "C1CC2CCC(C1)N2"_smiles;             // identical skeleton, no stereo
+  REQUIRE(chiral != nullptr);
+  REQUIRE(flat != nullptr);
+  double icChiral = calcOsmordred(*chiral)[ic5];
+  double icFlat = calcOsmordred(*flat)[ic5];
+
+  REQUIRE(std::abs(icChiral - icFlat) < 1e-4);   // stereo ignored => 2D, not 3D
+  REQUIRE(std::abs(icChiral - 3.1542) < 1e-3);   // 2D topological symmetry: 10 orbits
+  REQUIRE(std::abs(icChiral - 3.9161) > 1e-2);   // NOT the 3D/chiral value (16 orbits)
+}
+
+TEST_CASE("Osmordred InformationContent matches true graph-symmetry orbits (no Mordred over-refinement)") {
+  // osmordred IC partitions atoms into the TRUE 2D symmetry orbits (matches
+  // RDKit CanonicalRankAtoms). Mordred over-refines, splitting topologically
+  // equivalent atoms: it reports maleic anhydride IC5 = 2.725, whereas the true
+  // 5-orbit symmetry [2,2,2,2,1] gives 2.2810 -- which osmordred reproduces.
+  auto names = getOsmordredDescriptorNames();
+  size_t ic5 = names.size();
+  for (size_t i = 0; i < names.size(); ++i)
+    if (names[i] == "IC5") { ic5 = i; break; }
+  REQUIRE(ic5 < names.size());
+
+  auto mal = "O=C1OC(=O)C=C1"_smiles;  // maleic anhydride: 5 true symmetry orbits
+  REQUIRE(mal != nullptr);
+  REQUIRE(std::abs(calcOsmordred(*mal)[ic5] - 2.2810) < 1e-3);
+
+  auto benz = "c1ccccc1"_smiles;  // benzene: 2 orbits (6 C, 6 H) => IC5 = 1.0
+  REQUIRE(benz != nullptr);
+  REQUIRE(std::abs(calcOsmordred(*benz)[ic5] - 1.0) < 1e-3);
+}
+
 #else
 TEST_CASE("Osmordred Basic Functionality") {
   SECTION("No Osmordred support") {
