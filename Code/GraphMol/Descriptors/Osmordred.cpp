@@ -30,6 +30,8 @@
 //
 
 #include "Osmordred.h"
+#include <atomic>
+#include <thread>
 #include <boost/functional/hash.hpp> // For custom hashing of pairs
 #include <GraphMol/MolOps.h>
 #include <GraphMol/RDKitBase.h>
@@ -6025,50 +6027,59 @@ std::vector<double> calculateEtaEpsilonAll(const RDKit::ROMol& mol) {
     RDKIT_DESCRIPTORS_EXPORT std::vector<std::vector<double>> calcOsmordredBatchFromMols(
         const std::vector<const ROMol*>& mols, int n_jobs) {
 
-        std::vector<std::vector<double>> results;
-        results.reserve(mols.size());
+        size_t n = mols.size();
+        std::vector<std::vector<double>> results(n);
 
         unsigned int nThreads = getNumThreadsToUse(n_jobs);
-        const size_t nFeatures = 3585;
+        const size_t nFeatures = getOsmordredDescriptorNames().size();
         const std::vector<double> nanRow(nFeatures, std::numeric_limits<double>::quiet_NaN());
 
-        if (nThreads <= 1 || mols.size() < 10) {
-            for (const ROMol* mol : mols) {
-                if (mol) {
-                    try {
-                        results.push_back(calcOsmordred(*mol));
-                    } catch (...) {
-                        results.push_back(nanRow);
-                    }
-                } else {
-                    results.push_back(nanRow);
+        if (nThreads <= 1 || n < 10) {
+            for (size_t i = 0; i < n; ++i) {
+                const ROMol* mol = mols[i];
+                try {
+                    results[i] = mol ? calcOsmordred(*mol) : nanRow;
+                } catch (...) {
+                    results[i] = nanRow;
                 }
             }
             return results;
         }
 
-        std::vector<std::future<std::vector<double>>> futures;
-        futures.reserve(mols.size());
-        for (size_t idx = 0; idx < mols.size(); ++idx) {
-            const ROMol* mol = mols[idx];
-            futures.emplace_back(std::async(std::launch::async, [mol, nFeatures]() {
-                if (mol) {
+        // v3: bounded thread pool (nThreads workers + atomic work index), each
+        // running its molecule via std::async + wait_for -> bounded thread count
+        // (safe for large batches) AND a per-molecule timeout (hang protection).
+        // Replaces the one-std::async-per-molecule scheme (N threads, OOM risk).
+        std::atomic<size_t> nextIdx(0);
+        auto worker = [&]() {
+            size_t i;
+            while ((i = nextIdx.fetch_add(1)) < n) {
+                const ROMol* mol = mols[i];
+                if (!mol) {
+                    results[i] = nanRow;
+                    continue;
+                }
+                auto fut = std::async(std::launch::async, [mol, &nanRow]() -> std::vector<double> {
                     try {
                         return calcOsmordred(*mol);
                     } catch (...) {
-                        return std::vector<double>(nFeatures, std::numeric_limits<double>::quiet_NaN());
+                        return nanRow;
                     }
+                });
+                if (fut.wait_for(std::chrono::seconds(OSMORDRED_TIMEOUT_SECONDS)) == std::future_status::ready) {
+                    results[i] = fut.get();
+                } else {
+                    results[i] = nanRow;
                 }
-                return std::vector<double>(nFeatures, std::numeric_limits<double>::quiet_NaN());
-            }));
-        }
-        for (auto& f : futures) {
-            auto status = f.wait_for(std::chrono::seconds(OSMORDRED_TIMEOUT_SECONDS));
-            if (status == std::future_status::ready) {
-                results.push_back(f.get());
-            } else {
-                results.push_back(nanRow);
             }
+        };
+        std::vector<std::thread> pool;
+        pool.reserve(nThreads);
+        for (unsigned int t = 0; t < nThreads; ++t) {
+            pool.emplace_back(worker);
+        }
+        for (auto& th : pool) {
+            th.join();
         }
         return results;
     }
