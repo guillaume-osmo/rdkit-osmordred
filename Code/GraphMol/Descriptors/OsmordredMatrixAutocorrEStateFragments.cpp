@@ -554,12 +554,12 @@ std::vector<double> MatrixDescsL(const ROMol &mol,
 std::vector<double> calcBaryszMatrixDescsL(const ROMol &mol) {
   const PeriodicTable *tbl = PeriodicTable::getTable();
 
-  std::map<int, double> vdwmap = VdWAtomicMap();
-  std::map<int, double> semap = SandersonENAtomicMap();
-  std::map<int, double> pemap = PaulingENAtomicMap();
-  std::map<int, double> aremap = Allred_rocow_ENAtomicMap();
-  std::map<int, double> pmap = Polarizability94AtomicMap();
-  std::map<int, double> imap = ionizationEnergyAtomicMap();
+  const std::map<int, double> &vdwmap = VdWAtomicMap();
+  const std::map<int, double> &semap = SandersonENAtomicMap();
+  const std::map<int, double> &pemap = PaulingENAtomicMap();
+  const std::map<int, double> &aremap = Allred_rocow_ENAtomicMap();
+  const std::map<int, double> &pmap = Polarizability94AtomicMap();
+  const std::map<int, double> &imap = ionizationEnergyAtomicMap();
 
   double zcc = static_cast<double>(tbl->getAtomicNumber("C"));
   double mcc = static_cast<double>(tbl->getAtomicWeight("C"));
@@ -1763,12 +1763,12 @@ std::vector<double> calcBCUTs(const ROMol &mol) {
 
   // Atomic properties to compute
   auto *tbl = PeriodicTable::getTable();
-  std::map<int, double> vdwMap = VdWAtomicMap();
-  std::map<int, double> sandersonENMap = SandersonENAtomicMap();
-  std::map<int, double> paulingENMap = PaulingENAtomicMap();
-  std::map<int, double> allredENMap = Allred_rocow_ENAtomicMap();
-  std::map<int, double> polarizabilityMap = Polarizability94AtomicMap();
-  std::map<int, double> ionizationMap = ionizationEnergyAtomicMap();
+  const std::map<int, double> &vdwMap = VdWAtomicMap();
+  const std::map<int, double> &sandersonENMap = SandersonENAtomicMap();
+  const std::map<int, double> &paulingENMap = PaulingENAtomicMap();
+  const std::map<int, double> &allredENMap = Allred_rocow_ENAtomicMap();
+  const std::map<int, double> &polarizabilityMap = Polarizability94AtomicMap();
+  const std::map<int, double> &ionizationMap = ionizationEnergyAtomicMap();
 
   size_t numAtoms = mol.getNumAtoms();
   std::vector<double> gasteigerCharges(numAtoms, 0.0);
@@ -1813,18 +1813,18 @@ std::vector<double> calcBCUTs(const ROMol &mol) {
     atomicProperties[5][i] =
         tbl->getAtomicWeight(atomNumber);  // Atomic weight (m)
     atomicProperties[6][i] =
-        vdw_volume(vdwMap[atomNumber]);  // Van der Waals volume need vdw_volume
+        vdw_volume(atomicMapValue(vdwMap, atomNumber));  // Van der Waals volume need vdw_volume
                                          // to go from (r) to (v)
     atomicProperties[7][i] =
-        sandersonENMap[atomNumber];  // Sanderson electronegativity (se)
+        atomicMapValue(sandersonENMap, atomNumber);  // Sanderson electronegativity (se)
     atomicProperties[8][i] =
-        paulingENMap[atomNumber];  // Pauling electronegativity (pe)
+        atomicMapValue(paulingENMap, atomNumber);  // Pauling electronegativity (pe)
     atomicProperties[9][i] =
-        allredENMap[atomNumber];  // Allred-Rocow electronegativity (are)
+        atomicMapValue(allredENMap, atomNumber);  // Allred-Rocow electronegativity (are)
     atomicProperties[10][i] =
-        polarizabilityMap[atomNumber];  // Polarizability (p)
+        atomicMapValue(polarizabilityMap, atomNumber);  // Polarizability (p)
     atomicProperties[11][i] =
-        ionizationMap[atomNumber];  // Ionization energy (i)
+        atomicMapValue(ionizationMap, atomNumber);  // Ionization energy (i)
   }
 
   for (auto &result :
@@ -1861,12 +1861,12 @@ std::vector<double> calcAutoCorrelationEigen(const ROMol &mol) {
   unsigned int numAtoms = hmol->getNumAtoms();
 
   // Lookup tables
-  std::map<int, double> vdwmap = VdWAtomicMap();
-  std::map<int, double> semap = SandersonENAtomicMap();
-  std::map<int, double> pemap = PaulingENAtomicMap();
-  std::map<int, double> aremap = Allred_rocow_ENAtomicMap();
-  std::map<int, double> pmap = Polarizability94AtomicMap();
-  std::map<int, double> imap = ionizationEnergyAtomicMap();
+  const std::map<int, double> &vdwmap = VdWAtomicMap();
+  const std::map<int, double> &semap = SandersonENAtomicMap();
+  const std::map<int, double> &pemap = PaulingENAtomicMap();
+  const std::map<int, double> &aremap = Allred_rocow_ENAtomicMap();
+  const std::map<int, double> &pmap = Polarizability94AtomicMap();
+  const std::map<int, double> &imap = ionizationEnergyAtomicMap();
   const auto *tbl = PeriodicTable::getTable();
 
   // Eigen vector for atomic properties
@@ -1891,12 +1891,12 @@ std::vector<double> calcAutoCorrelationEigen(const ROMol &mol) {
     propertyMatrix(2, i) = getIntrinsicState(*atom);
     propertyMatrix(3, i) = static_cast<double>(atomNumber);
     propertyMatrix(4, i) = tbl->getAtomicWeight(atomNumber);
-    propertyMatrix(5, i) = vdw_volume(vdwmap[atomNumber]);
-    propertyMatrix(6, i) = semap[atomNumber];
-    propertyMatrix(7, i) = pemap[atomNumber];
-    propertyMatrix(8, i) = aremap[atomNumber];
-    propertyMatrix(9, i) = pmap[atomNumber];
-    propertyMatrix(10, i) = imap[atomNumber];
+    propertyMatrix(5, i) = vdw_volume(atomicMapValue(vdwmap, atomNumber));
+    propertyMatrix(6, i) = atomicMapValue(semap, atomNumber);
+    propertyMatrix(7, i) = atomicMapValue(pemap, atomNumber);
+    propertyMatrix(8, i) = atomicMapValue(aremap, atomNumber);
+    propertyMatrix(9, i) = atomicMapValue(pmap, atomNumber);
+    propertyMatrix(10, i) = atomicMapValue(imap, atomNumber);
     propertyMatrix(11, i) = gasteigerCharges[i];  // need to change order ...
   }
 
@@ -2039,12 +2039,12 @@ std::vector<double> calcAutoCorrelation(const ROMol &mol) {
   const unsigned int numAtoms = hmol->getNumAtoms();
   const unsigned int numProperties = 12;
   // Lookup tables
-  std::map<int, double> vdwmap = VdWAtomicMap();
-  std::map<int, double> semap = SandersonENAtomicMap();
-  std::map<int, double> pemap = PaulingENAtomicMap();
-  std::map<int, double> aremap = Allred_rocow_ENAtomicMap();
-  std::map<int, double> pmap = Polarizability94AtomicMap();
-  std::map<int, double> imap = ionizationEnergyAtomicMap();
+  const std::map<int, double> &vdwmap = VdWAtomicMap();
+  const std::map<int, double> &semap = SandersonENAtomicMap();
+  const std::map<int, double> &pemap = PaulingENAtomicMap();
+  const std::map<int, double> &aremap = Allred_rocow_ENAtomicMap();
+  const std::map<int, double> &pmap = Polarizability94AtomicMap();
+  const std::map<int, double> &imap = ionizationEnergyAtomicMap();
   const auto *tbl = PeriodicTable::getTable();
   // Property matrix as a vector of vectors
   std::vector<std::vector<double>> propertyMatrix(
@@ -2078,12 +2078,12 @@ std::vector<double> calcAutoCorrelation(const ROMol &mol) {
     propertyMatrix[3][i] = getIntrinsicState(*atom);
     propertyMatrix[4][i] = static_cast<double>(atomNumber);
     propertyMatrix[5][i] = tbl->getAtomicWeight(atomNumber);
-    propertyMatrix[6][i] = vdw_volume(vdwmap[atomNumber]);
-    propertyMatrix[7][i] = semap[atomNumber];
-    propertyMatrix[8][i] = pemap[atomNumber];
-    propertyMatrix[9][i] = aremap[atomNumber];
-    propertyMatrix[10][i] = pmap[atomNumber];
-    propertyMatrix[11][i] = imap[atomNumber];
+    propertyMatrix[6][i] = vdw_volume(atomicMapValue(vdwmap, atomNumber));
+    propertyMatrix[7][i] = atomicMapValue(semap, atomNumber);
+    propertyMatrix[8][i] = atomicMapValue(pemap, atomNumber);
+    propertyMatrix[9][i] = atomicMapValue(aremap, atomNumber);
+    propertyMatrix[10][i] = atomicMapValue(pmap, atomNumber);
+    propertyMatrix[11][i] = atomicMapValue(imap, atomNumber);
   }
 
   // Initialize the topological symetric distance matrix without diagonal

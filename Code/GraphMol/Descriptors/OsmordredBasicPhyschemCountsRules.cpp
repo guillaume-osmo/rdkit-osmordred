@@ -1479,7 +1479,7 @@ double calcMcGowanVolume(const ROMol &mol) {
   double res = 0.;
   std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
 
-  std::map<int, double> mgvmap = McGowanVolumAtomicMap();
+  const std::map<int, double> &mgvmap = McGowanVolumAtomicMap();
 
   for (const auto &atom : hmol->atoms()) {
     int atomicNum = atom->getAtomicNum();

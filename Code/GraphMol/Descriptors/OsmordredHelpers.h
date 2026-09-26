@@ -104,6 +104,14 @@ const std::map<int, double> &PaulingENAtomicMap();
 const std::map<int, double> &Allred_rocow_ENAtomicMap();
 const std::map<int, double> &ionizationEnergyAtomicMap();
 
+//! value stored for \c atomicNum in one of the atomic property maps above,
+//! or 0 when the element is missing (what std::map::operator[] used to insert)
+inline double atomicMapValue(const std::map<int, double> &atomicMap,
+                             int atomicNum) {
+  const auto it = atomicMap.find(atomicNum);
+  return it == atomicMap.end() ? 0.0 : it->second;
+}
+
 inline double vdw_volume(double r) {
   return (4.0 / 3.0) * M_PI * std::pow(r, 3);
 }
