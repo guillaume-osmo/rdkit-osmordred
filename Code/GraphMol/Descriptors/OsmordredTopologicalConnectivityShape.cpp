@@ -1041,35 +1041,28 @@ std::vector<std::vector<double>> calculateAdjacencyMatrixL(const ROMol &mol) {
 }
 
 // All-pairs longest simple path WITHIN one biconnected component (a single ring system,
-// hence small). Same naive backtracking DFS as longestSimplePathL, but confined to the BCC
-// so the exponential cost stays bounded. lsp is keyed by (min,max) global atom index.
-static void allPairsLongestPathBCC(
-    const std::vector<int> &nodes,
-    const std::unordered_map<int, std::vector<std::pair<int, double>>> &adj,
-    std::map<std::pair<int, int>, double> &lsp) {
-  std::unordered_set<int> visited;
-  std::function<void(int, double, std::unordered_map<int, double> &)> dfs =
-      [&](int u, double dist, std::unordered_map<int, double> &result) {
-        visited.insert(u);
-        auto rIt = result.find(u);
-        if (dist > rIt->second) rIt->second = dist;
-        auto aIt = adj.find(u);
-        if (aIt != adj.end())
-          for (const auto &vw : aIt->second)
-            if (visited.find(vw.first) == visited.end())
-              dfs(vw.first, dist + vw.second, result);
-        visited.erase(u);
-      };
+// hence small): naive backtracking DFS from every node, confined to the BCC so the
+// exponential cost stays bounded. adj, visited and the rows of lsp are indexed by global
+// atom index; lsp(s, g) receives the longest s-g path for every pair of block nodes.
+static void allPairsLongestPathBCC(const std::vector<int> &nodes,
+                                   const std::vector<std::vector<int>> &adj,
+                                   std::vector<char> &visited,
+                                   std::vector<std::vector<double>> &lsp) {
+  std::vector<double> result(adj.size(), 0.0);
+  std::function<void(int, double)> dfs = [&](int u, double dist) {
+    visited[u] = 1;
+    if (dist > result[u]) result[u] = dist;
+    for (int v : adj[u]) {
+      if (!visited[v]) dfs(v, dist + 1.0);
+    }
+    visited[u] = 0;
+  };
   for (int s : nodes) {
-    std::unordered_map<int, double> result;
     for (int n : nodes) result[n] = 0.0;
-    visited.clear();
-    dfs(s, 0.0, result);
+    dfs(s, 0.0);
     for (int g : nodes) {
-      auto key = std::make_pair(std::min(s, g), std::max(s, g));
-      double d = result[g];
-      auto f = lsp.find(key);
-      if (f == lsp.end() || d > f->second) lsp[key] = d;
+      lsp[s][g] = std::max(lsp[s][g], result[g]);
+      lsp[g][s] = lsp[s][g];
     }
   }
 }
@@ -1080,6 +1073,7 @@ static void allPairsLongestPathBCC(
 // tree (blocks share exactly one cut atom). Returns an EMPTY matrix if any single ring
 // system is too large to be tractable (circuit rank > 12; a fullerene-like cage, never in
 // real drug/natural-product chemistry), signalling the caller to emit NaN.
+// All path lengths are sums of unit bond lengths, so they are exact in double precision.
 static std::vector<std::vector<double>> computeDetourMatrixBCC(const ROMol &mol) {
   using namespace boost;
   const int N = static_cast<int>(mol.getNumAtoms());
@@ -1107,79 +1101,78 @@ static std::vector<std::vector<double>> computeDetourMatrixBCC(const ROMol &mol)
                                         static_cast<int>(target(*ei, g)));
   }
 
-  struct Block {
-    std::set<int> nodes;
-    std::map<std::pair<int, int>, double> lsp;
-  };
-  std::vector<Block> Q;
+  // Longest paths inside each block. Every pair of nodes of a block gets an entry in
+  // blockLsp (row-major, global indices); pairs in two different blocks are never
+  // read from it.
+  std::vector<std::vector<int>> blockNodes;
+  std::vector<std::vector<double>> blockLsp(N, std::vector<double>(N, 0.0));
+  std::vector<std::vector<int>> adj(N);
+  std::vector<char> visited(N, 0);
+  std::vector<char> inBlock(N, 0);
   for (const auto &edgesInBcc : bccEdges) {
     if (edgesInBcc.empty()) continue;
-    std::set<int> bnodes;
-    std::unordered_map<int, std::vector<std::pair<int, double>>> adj;
-    for (const auto &ab : edgesInBcc) {
-      bnodes.insert(ab.first);
-      bnodes.insert(ab.second);
-      adj[ab.first].emplace_back(ab.second, 1.0);
-      adj[ab.second].emplace_back(ab.first, 1.0);
+    std::vector<int> bnodes;
+    for (const auto &[a, b] : edgesInBcc) {
+      for (int n : {a, b}) {
+        if (!inBlock[n]) {
+          inBlock[n] = 1;
+          bnodes.push_back(n);
+        }
+      }
+      adj[a].push_back(b);
+      adj[b].push_back(a);
     }
+    std::sort(bnodes.begin(), bnodes.end());
     const int rank =
         static_cast<int>(edgesInBcc.size()) - static_cast<int>(bnodes.size()) + 1;
     if (rank > 12) return {};  // intractable single ring system -> caller emits NaN
-    Block blk;
-    blk.nodes = bnodes;
-    std::vector<int> nodeVec(bnodes.begin(), bnodes.end());
-    allPairsLongestPathBCC(nodeVec, adj, blk.lsp);
-    Q.push_back(std::move(blk));
+    allPairsLongestPathBCC(bnodes, adj, visited, blockLsp);
+    for (int n : bnodes) {
+      adj[n].clear();
+      inBlock[n] = 0;
+    }
+    blockNodes.push_back(std::move(bnodes));
   }
-  if (Q.empty()) return std::vector<std::vector<double>>(N, std::vector<double>(N, 0.0));
+  if (blockNodes.empty()) return std::vector<std::vector<double>>(N, std::vector<double>(N, 0.0));
 
-  // Merge blocks along the block-cut tree (Mordred CalcDetour.merge / calc_weight).
-  std::set<int> nodes = Q.back().nodes;
-  std::map<std::pair<int, int>, double> C = Q.back().lsp;
-  Q.pop_back();
-  while (!Q.empty()) {
+  // Merge blocks along the block-cut tree (Mordred CalcDetour.merge / calc_weight): a new
+  // block shares exactly one (cut) atom with the atoms merged so far; paths between an old
+  // atom i and a new atom j go through that atom.
+  std::vector<std::vector<double>> D(N, std::vector<double>(N, 0.0));
+  std::vector<char> merged(N, 0);
+  std::vector<int> nodes = blockNodes.back();
+  for (int i : nodes) {
+    merged[i] = 1;
+    for (int j : nodes) D[i][j] = blockLsp[i][j];
+  }
+  blockNodes.pop_back();
+  while (!blockNodes.empty()) {
     int found = -1, common = -1;
-    for (int i = static_cast<int>(Q.size()) - 1; i >= 0; --i) {
+    for (int i = static_cast<int>(blockNodes.size()) - 1; i >= 0; --i) {
       int inter = -1, nInter = 0;
-      for (int n : Q[i].nodes)
-        if (nodes.count(n)) { inter = n; if (++nInter > 1) break; }
+      for (int n : blockNodes[i])
+        if (merged[n]) { inter = n; if (++nInter > 1) break; }
       if (nInter == 0) continue;
       if (nInter > 1) return {};  // block-cut property violated (shouldn't happen)
       found = i; common = inter; break;
     }
     if (found < 0) return {};  // disconnected (shouldn't happen for a valid molecule)
-    Block blk = std::move(Q[found]);
-    Q.erase(Q.begin() + found);
-    std::set<int> newNodes = nodes;
-    for (int n : blk.nodes) newNodes.insert(n);
-    const auto &lsp = blk.lsp;
-    std::map<std::pair<int, int>, double> newC;
-    for (int i : newNodes)
-      for (int j : newNodes) {
-        if (i > j) continue;
-        auto ij = std::make_pair(i, j);
-        auto cIt = C.find(ij);
-        if (cIt != C.end()) { newC[ij] = cIt->second; continue; }
-        auto lIt = lsp.find(ij);
-        if (lIt != lsp.end()) { newC[ij] = lIt->second; continue; }
-        auto ic = std::make_pair(std::min(i, common), std::max(i, common));
-        auto jc = std::make_pair(std::min(j, common), std::max(j, common));
-        auto cic = C.find(ic);
-        auto ljc = lsp.find(jc);
-        if (cic != C.end() && ljc != lsp.end()) { newC[ij] = cic->second + ljc->second; continue; }
-        auto cjc = C.find(jc);
-        auto lic = lsp.find(ic);
-        if (cjc != C.end() && lic != lsp.end()) { newC[ij] = cjc->second + lic->second; continue; }
-        return {};  // unexpected
+    std::vector<int> block = std::move(blockNodes[found]);
+    blockNodes.erase(blockNodes.begin() + found);
+    for (int j : block) {
+      if (j == common) continue;
+      for (int i : block) D[i][j] = D[j][i] = blockLsp[i][j];
+      for (int i : nodes) {
+        if (i == common) continue;
+        D[i][j] = D[j][i] = D[i][common] + blockLsp[j][common];
       }
-    C = std::move(newC);
-    nodes = std::move(newNodes);
-  }
-
-  std::vector<std::vector<double>> D(N, std::vector<double>(N, 0.0));
-  for (const auto &kv : C) {
-    D[kv.first.first][kv.first.second] = kv.second;
-    D[kv.first.second][kv.first.first] = kv.second;
+    }
+    for (int j : block) {
+      if (!merged[j]) {
+        merged[j] = 1;
+        nodes.push_back(j);
+      }
+    }
   }
   return D;
 }
