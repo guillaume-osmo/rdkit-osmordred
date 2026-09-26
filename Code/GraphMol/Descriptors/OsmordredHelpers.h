@@ -7,14 +7,6 @@
 
 #include <Eigen/Dense>  // we should try to remove those...
 
-#if defined(_MSC_VER) && !defined(__clang__) && !defined(__INTEL_COMPILER)
-#include <complex>
-#define lapack_complex_float std::complex<float>
-#define lapack_complex_double std::complex<double>
-#endif
-
-#include <lapacke.h>
-
 namespace RDKit {
 namespace Descriptors {
 namespace Osmordred {

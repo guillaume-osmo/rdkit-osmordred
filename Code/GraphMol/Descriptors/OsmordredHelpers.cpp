@@ -32,6 +32,24 @@
 #include <GraphMol/SmilesParse/SmilesWrite.h>
 #include <stack>
 
+// Dense linear algebra backend. Eigen is the default: it is header-only, so
+// Osmordred builds wherever the RDKit does, including MinimalLib (WASM).
+// Define RDK_OSMORDRED_USE_LAPACKE (cmake -DRDK_OSMORDRED_USE_LAPACKE=ON) to
+// use LAPACKE instead.
+#ifdef RDK_OSMORDRED_USE_LAPACKE
+#if defined(_MSC_VER) && !defined(__clang__) && !defined(__INTEL_COMPILER)
+#include <complex>
+#define lapack_complex_float std::complex<float>
+#define lapack_complex_double std::complex<double>
+#endif
+#include <lapacke.h>
+#else
+#include <Eigen/Cholesky>
+#include <Eigen/Eigenvalues>
+#include <Eigen/LU>
+#include <Eigen/SVD>
+#endif
+
 namespace RDKit {
 namespace Descriptors {
 namespace Osmordred {
@@ -675,6 +693,52 @@ extractAndClassifyPaths(const RDKit::ROMol &mol, unsigned int targetLength,
   return results;
 }
 
+#ifndef RDK_OSMORDRED_USE_LAPACKE
+// Same cascade and the same failure criteria as the LAPACKE branch below, so
+// both backends take the same branch for a given matrix:
+//   dposv  -> LLT on the upper triangle, fails on a non-positive pivot
+//   dgesv  -> partial-pivoting LU, fails on an exactly zero pivot of U
+//   dgelss -> minimum-norm least squares, singular values <= rcond * s_max
+//             are treated as zero
+// A (column-major, n x n) is left untouched; B (column-major, n x nrhs) is
+// overwritten with the solution.
+void solveLinearSystem(const ROMol &mol, std::vector<double> &A,
+                       std::vector<double> &B, int n, int nrhs,
+                       bool &success) {
+  success = false;
+  if (n <= 0 || nrhs <= 0) {
+    return;
+  }
+  const Eigen::Map<const Eigen::MatrixXd> a(A.data(), n, n);
+  Eigen::Map<Eigen::MatrixXd> b(B.data(), n, nrhs);
+
+  const Eigen::LLT<Eigen::MatrixXd, Eigen::Upper> llt(a);
+  if (llt.info() == Eigen::Success) {
+    b = llt.solve(b).eval();
+    success = true;
+    return;
+  }
+
+  const Eigen::PartialPivLU<Eigen::MatrixXd> lu(a);
+  if ((lu.matrixLU().diagonal().array() != 0.0).all()) {
+    b = lu.solve(b).eval();
+    success = true;
+    return;
+  }
+
+  Eigen::BDCSVD<Eigen::MatrixXd> svd(a,
+                                     Eigen::ComputeThinU | Eigen::ComputeThinV);
+  svd.setThreshold(1e-15);  // dgelss rcond
+  const Eigen::MatrixXd x = svd.solve(b);
+  if (x.allFinite()) {
+    b = x;
+    success = true;
+    return;
+  }
+  std::cerr << "ERROR: All Eigen solvers failed (LLT, LU, SVD), Smiles:"
+            << RDKit::MolToSmiles(mol) << "\n";
+}
+#else
 void solveLinearSystem(const ROMol &mol, std::vector<double>& A, std::vector<double>& B,
 		       int n, int nrhs, bool& success) {
     int lda = n; // Leading dimension of A
@@ -734,12 +798,13 @@ void solveLinearSystem(const ROMol &mol, std::vector<double>& A, std::vector<dou
             } else {
                 // All solvers failed - this is a true error
                 std::string outputSmiles = RDKit::MolToSmiles(mol);
-                std::cerr << "ERROR: All LAPACK solvers failed (dposv, dgesv, dgelss): info=" 
+                std::cerr << "ERROR: All LAPACK solvers failed (dposv, dgesv, dgelss): info="
                           << info << ", Smiles:" << outputSmiles << "\n";
             }
         }
     }
 }
+#endif  // RDK_OSMORDRED_USE_LAPACKE
 
 ////// Barysz Matrixes Eigen style
 
@@ -867,6 +932,23 @@ void compute_eigenvalues_and_eigenvectorsL(
   eigenvalues.resize(n);
   eigenvectors = matrix;  // Copy matrix to preserve the original
 
+#ifndef RDK_OSMORDRED_USE_LAPACKE
+  if (n > 0) {
+    Eigen::MatrixXd m(n, n);
+    for (int i = 0; i < n; ++i)
+      for (int j = 0; j < n; ++j) m(i, j) = matrix[i][j];
+    // dsyev('U') reads the upper triangle and Eigen reads the lower one, so
+    // decompose the transpose. Eigenvalues come back ascending in both.
+    const Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(m.transpose());
+    if (solver.info() != Eigen::Success) {
+      throw std::runtime_error("Error in SelfAdjointEigenSolver");
+    }
+    for (int i = 0; i < n; ++i) {
+      eigenvalues[i] = solver.eigenvalues()(i);
+      for (int j = 0; j < n; ++j) eigenvectors[i][j] = solver.eigenvectors()(i, j);
+    }
+  }
+#else
   // Convert the 2D vector to a 1D array in column-major order for LAPACK
   std::vector<double> flatMatrix(n * n);
   for (int i = 0; i < n; ++i)
@@ -882,6 +964,7 @@ void compute_eigenvalues_and_eigenvectorsL(
   // Reshape the flatMatrix back into eigenvectors
   for (int i = 0; i < n; ++i)
     for (int j = 0; j < n; ++j) eigenvectors[i][j] = flatMatrix[j * n + i];
+#endif  // RDK_OSMORDRED_USE_LAPACKE
 
   // Canonicalize eigenvector signs: force first non-zero entry positive per
   // column
