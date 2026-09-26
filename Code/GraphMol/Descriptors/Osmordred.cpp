@@ -32,7 +32,7 @@
 #include "Osmordred.h"
 #include <atomic>
 #include <thread>
-// #include "OsmordredHelpers.h"
+#include "OsmordredHelpers.h"
 
 #include <boost/functional/hash.hpp>  // For custom hashing of pairs
 #include <RDGeneral/RDThreads.h>
@@ -98,6 +98,9 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
   // Always compute the full v2 set; keep signature for ABI stability
   const bool doExEstate = true;
 
+  // intermediates shared by the blocks below (built lazily, once)
+  OsmordredContext ctx(mol);
+
   auto checkTimeout = [&]() {
     if (end_time && Clock::now() >= *end_time) {
       std::cerr << "*" << std::endl;
@@ -130,17 +133,17 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
   appendInt(calcAcidBase(mol));         // addNames("AcidBase", 2);
   append(calcAdjMatrixDescsL(mol));     // addNames("AdjacencyMatrix", 12);
   appendInt(calcAromatic(mol));         // addNames("Aromatic", 2);
-  appendInt(calcAtomCounts(mol));       // addNames("AtomCount", 17);
-  append(calcAutoCorrelation(mol));     // addNames("Autocorrelation", 606);
+  appendInt(calcAtomCounts(ctx));       // addNames("AtomCount", 17);
+  append(calcAutoCorrelation(ctx));     // addNames("Autocorrelation", 606);
   append(calcBCUTs(mol));               // addNames("BCUT", 24);
   append1(calcBalabanJ(mol));            // addNames("BalabanJ", 1);
   append(calcBaryszMatrixDescsL(mol));  // addNames("BaryszMatrix", 104);
   append1(calcBertzCT(mol));             // addNames("BertzCT", 1);
-  appendInt(calcBondCounts(mol));       // addNames("BondCount", 9);
-  append(calcRNCG_RPCG(mol));           // addNames("RNCGRPCG", 2);
+  appendInt(calcBondCounts(ctx));       // addNames("BondCount", 9);
+  append(calcRNCG_RPCG(ctx));           // addNames("RNCGRPCG", 2);
   append(calcCarbonTypes(mol));         // addNames("CarbonTypes", 11);
   append(calcAllChiDescriptors(mol));   // addNames("Chi", 56);
-  append(calcConstitutional(mol));      // addNames("Constitutional", 16);
+  append(calcConstitutional(ctx));      // addNames("Constitutional", 16);
   append(calcDetourMatrixDescsL(mol));  // addNames("DetourMatrix", 14);
   append(calcDistMatrixDescsL(mol));    // addNames("DistanceMatrix", 12);
   append(calcEStateDescs(mol, doExEstate));  // addNames("EState", 404);
@@ -149,20 +152,20 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
   append(calcExtendedTopochemicalAtom(
       mol));  // addNames("ExtendedTopochemicalAtom", 45);
   append1(calcFragmentComplexity(mol));     // addNames("FragmentComplexity", 1);
-  append1(calcFramework(mol));              // addNames("Framework", 1);
+  append1(calcFramework(ctx));              // addNames("Framework", 1);
   append(calcHydrogenBond(mol));           // addNames("HydrogenBond", 2);
   append1(calcLogS(mol));                   // addNames("LogS", 1);
   append(calcInformationContent(mol, opts.icOptions));  // addNames("InformationContent",
                                            // 42);
   append(calcKappaShapeIndex(mol));   // addNames("KappaShapeIndex", 3);
-  appendInt(calcLipinskiGhose(mol));  // addNames("Lipinski", 2);
-  append1(calcMcGowanVolume(mol));     // addNames("McGowanVolume", 1);
+  appendInt(calcLipinskiGhose(ctx));  // addNames("Lipinski", 2);
+  append1(calcMcGowanVolume(ctx));     // addNames("McGowanVolume", 1);
   append(calcMoeType(mol));           // addNames("MoeType", 54);
   append(calcMolecularDistanceEdgeDescs(
       mol));                        // addNames("MolecularDistanceEdge", 19);
   append(calcMolecularId(mol));     // addNames("MolecularId", 12);
   append(calcPathCount(mol));       // addNames("PathCount", 21);
-  append(calcPolarizability(mol));  // addNames("Polarizability", 2);
+  append(calcPolarizability(ctx));  // addNames("Polarizability", 2);
   appendInt(calcRingDescriptors(mol));      // addNames("RingCount", 138);
   append(calcRotatableBond(mol));           // addNames("RotatableBond", 2);
   append(calcSLogP(mol));                   // addNames("SLogP", 2);
@@ -170,11 +173,11 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
   append(calcTopologicalChargeDescs(mol));  // addNames("TopologicalCharge",
                                             // 21);
   append(calcTopologicalIndex(mol));  // addNames("TopologicalIndex", 4);
-  append1(calcVdwVolumeABC(mol));      // addNames("VdwVolumeABC", 1);
+  append1(calcVdwVolumeABC(ctx));      // addNames("VdwVolumeABC", 1);
   append1(calcVertexAdjacencyInformation(
       mol));                    // addNames("VertexAdjacencyInformation", 1);
   append(calcWalkCounts(mol));  // addNames("WalkCount", 21);
-  append(calcWeight(mol));      // addNames("Weight", 2);
+  append(calcWeight(ctx));      // addNames("Weight", 2);
   appendInt(calcWienerIndex(mol));        // addNames("WienerIndex", 2);
   append(calcZagrebIndex(mol));           // addNames("ZagrebIndex", 4);
   append1(calcPol(mol));                   // addNames("Pol", 1);

@@ -7,9 +7,52 @@
 
 #include <Eigen/Dense>  // we should try to remove those...
 
+#include <memory>
+
 namespace RDKit {
 namespace Descriptors {
 namespace Osmordred {
+
+//! Per-molecule intermediates shared by the descriptor blocks of one
+//! calcOsmordred call ("compute once, use everywhere"). Not exported: the
+//! public calcXxx(mol) functions build a local context, calcOsmordred builds
+//! one for all blocks. Every intermediate is built lazily, on first use, from
+//! the molecule as it is at that point, exactly as the blocks built it before.
+class OsmordredContext {
+ public:
+  explicit OsmordredContext(const ROMol &mol) : d_mol(mol) {}
+  OsmordredContext(const OsmordredContext &) = delete;
+  OsmordredContext &operator=(const OsmordredContext &) = delete;
+
+  const ROMol &mol() const { return d_mol; }
+
+  //! MolOps::addHs(mol). The copy is shared only when the input already has
+  //! SSSR-or-better ring information: blocks never modify that, so the H
+  //! molecule (which copies the ring information) is the same whenever it is
+  //! built. Otherwise a fresh copy is made on every call, as before. Blocks
+  //! may set computed properties (Gasteiger charges, cached distance matrix)
+  //! on it but must not modify its structure.
+  const ROMol &molWithHs();
+
+ private:
+  const ROMol &d_mol;
+  std::unique_ptr<ROMol> d_molWithHs;
+  bool d_molWithHsShared = false;
+};
+
+// Internal context overloads of the public descriptor blocks (same results
+// as the public functions, which call them with a local context).
+std::vector<int> calcAtomCounts(OsmordredContext &ctx);
+std::vector<int> calcBondCounts(OsmordredContext &ctx);
+std::vector<double> calcWeight(OsmordredContext &ctx);
+double calcVdwVolumeABC(OsmordredContext &ctx);
+std::vector<int> calcLipinskiGhose(OsmordredContext &ctx);
+double calcMcGowanVolume(OsmordredContext &ctx);
+std::vector<double> calcPolarizability(OsmordredContext &ctx);
+std::vector<double> calcConstitutional(OsmordredContext &ctx);
+std::vector<double> calcRNCG_RPCG(OsmordredContext &ctx);
+std::vector<double> calcAutoCorrelation(OsmordredContext &ctx);
+double calcFramework(OsmordredContext &ctx);
 template <class T>
 double InfoEntropy(const std::vector<T> &data) {
   T nInstances = 0;

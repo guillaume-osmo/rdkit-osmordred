@@ -1704,7 +1704,8 @@ bool checkGasteigerParameters(const ROMol &mol) {
   return true;
 }
 
-std::vector<double> calcRNCG_RPCG(const ROMol &mol) {
+std::vector<double> calcRNCG_RPCG(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   // subclass of CPSA using only 2D descriptors available in Mordred v1
   // v2.0: Check Gasteiger parameters first (on original mol, before adding H)
   if (!checkGasteigerParameters(mol)) {
@@ -1712,7 +1713,7 @@ std::vector<double> calcRNCG_RPCG(const ROMol &mol) {
             std::numeric_limits<double>::quiet_NaN()};
   }
 
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
 
   double maxpos = 0;
   double maxneg = 0;
@@ -1751,6 +1752,11 @@ std::vector<double> calcRNCG_RPCG(const ROMol &mol) {
     return {0., 0.};
   }
   return {maxneg / totalneg, maxpos / totalpos};
+}
+
+std::vector<double> calcRNCG_RPCG(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcRNCG_RPCG(ctx);
 }
 
 // Function to compute BCUT descriptors for multiple properties
@@ -2027,11 +2033,12 @@ std::vector<double> calcAutoCorrelationEigen(const ROMol &mol) {
 }
 
 // Function to compute the ATS descriptors without Eigen
-std::vector<double> calcAutoCorrelation(const ROMol &mol) {
+std::vector<double> calcAutoCorrelation(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   // v2.0: Check Gasteiger parameters first (on original mol, before adding H)
   bool gasteiger_ok = checkGasteigerParameters(mol);
 
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
   double *dist = MolOps::getDistanceMat(*hmol, false);  // Topological matrix
   const unsigned int numAtoms = hmol->getNumAtoms();
   const unsigned int numProperties = 12;
@@ -2210,6 +2217,11 @@ std::vector<double> calcAutoCorrelation(const ROMol &mol) {
   return descriptors;
 }
 
+std::vector<double> calcAutoCorrelation(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcAutoCorrelation(ctx);
+}
+
 std::unordered_set<int> findLinkersWithBFS(
     const ROMol &mol, const std::unordered_set<int> &ringAtoms) {
   const RingInfo &ringInfo = getRings(mol);
@@ -2280,7 +2292,8 @@ std::unordered_set<int> findLinkersWithBFS(
 }
 
 // Function to calculate the FMF ratio
-double calcFramework(const ROMol &mol) {
+double calcFramework(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   const RingInfo &ringInfo = getRings(mol);
   std::unordered_set<int> ringAtoms;
 
@@ -2296,7 +2309,7 @@ double calcFramework(const ROMol &mol) {
   std::unordered_set<int> linkers = findLinkersWithBFS(mol, ringAtoms);
 
   // Total number of atoms (including hydrogens)
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
   int totalAtoms = hmol->getNumAtoms();
 
   // Number of framework atoms: linkers + ring atoms
@@ -2306,6 +2319,11 @@ double calcFramework(const ROMol &mol) {
   double FMF = static_cast<double>(frameworkAtoms) / totalAtoms;
 
   return FMF;
+}
+
+double calcFramework(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcFramework(ctx);
 }
 
 // BRStates: Tetko version only organis !

@@ -379,8 +379,9 @@ static const std::unordered_map<std::string, int> elementMapAtomCounts = {
     {"P", 7}, {"F", 8}, {"Cl", 9}, {"Br", 10}, {"I", 11}};
 
 // Function to calculate the atom count descriptor
-std::vector<int> calcAtomCounts(const ROMol &mol) {
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+std::vector<int> calcAtomCounts(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
+  const ROMol *hmol = &ctx.molWithHs();
 
   // Initialize the counts for each atom type
 
@@ -451,6 +452,11 @@ std::vector<int> calcAtomCounts(const ROMol &mol) {
   int nHetero = Descriptors::calcNumHeteroatoms(mol);
   return {nAtoms, nHeavy, nSpiro, nBrigde, nHetero, nH,  nB, nC, nN,
           nO,     nS,     nP,     nF,      nCl,     nBr, nI, nX};
+}
+
+std::vector<int> calcAtomCounts(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcAtomCounts(ctx);
 }
 
 // return vector sum over rows
@@ -709,12 +715,13 @@ double calcBertzCT(const ROMol &mol) {
 
 // bondCount
 
-std::vector<int> calcBondCounts(const ROMol &mol) {
+std::vector<int> calcBondCounts(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   // Vector to hold bond counts: [Any, Single, Double, Triple, Aromatic,
   // Multiple]
   std::vector<int> bondCounts(9, 0);
 
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
 
   bondCounts[0] = hmol->getNumBonds();
 
@@ -769,6 +776,11 @@ std::vector<int> calcBondCounts(const ROMol &mol) {
   delete kekulizedMol;
 
   return bondCounts;
+}
+
+std::vector<int> calcBondCounts(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcBondCounts(ctx);
 }
 
 // CarbonTypes there is an issue in the code not sure why this is not the same
@@ -949,13 +961,19 @@ std::vector<double> calcWalkCounts(const ROMol &mol) {
 // Weight - returns ExactMW and average MW per atom.
 // trick is to add the Hs for the average not only heavy atoms!
 // we need a function that can do this trick!!!
-std::vector<double> calcWeight(const ROMol &mol) {
+std::vector<double> calcWeight(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   std::vector<double> W(2, 0.);
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
   W[0] = Descriptors::calcExactMW(mol);
   int fullatomsnumber = hmol->getNumAtoms();
   W[1] = W[0] / fullatomsnumber;
   return W;
+}
+
+std::vector<double> calcWeight(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcWeight(ctx);
 }
 
 // Wiener Index
@@ -1040,8 +1058,9 @@ const std::unordered_map<int, double> atomContributions = []() {
 
 // VdwVolumeABC
 // working "Need Hs explicit!"
-double calcVdwVolumeABC(const ROMol &mol) {
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+double calcVdwVolumeABC(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
+  const ROMol *hmol = &ctx.molWithHs();
 
   // Nb is the number of bonds
   // NRa is the number of aromatic rings
@@ -1064,6 +1083,11 @@ double calcVdwVolumeABC(const ROMol &mol) {
 
   // Compute van der Waals volume
   return ac - 5.92 * Nb - 14.7 * NRa - 3.8 * NRA;
+}
+
+double calcVdwVolumeABC(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcVdwVolumeABC(ctx);
 }
 
 namespace {
@@ -1453,7 +1477,8 @@ int calculateGhoseFilter(double MW, double LogP, double MR, int numAtoms) {
 }
 
 // Main function to calculate Lipinski and Ghose filter
-std::vector<int> calcLipinskiGhose(const ROMol &mol) {
+std::vector<int> calcLipinskiGhose(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   double MW = Descriptors::calcExactMW(mol);
   double HBDon = static_cast<double>(Descriptors::calcNumHBD(mol));
   double HBAcc = static_cast<double>(Descriptors::calcNumHBA(mol));
@@ -1464,7 +1489,7 @@ std::vector<int> calcLipinskiGhose(const ROMol &mol) {
   int lipinski = calculateLipinski(LogP, MW, HBDon, HBAcc);
   // must add Hs for Ghose
 
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
 
   int numAtoms = hmol->getNumAtoms();
 
@@ -1473,10 +1498,16 @@ std::vector<int> calcLipinskiGhose(const ROMol &mol) {
   return {lipinski, ghoseFilter};
 }
 
-double calcMcGowanVolume(const ROMol &mol) {
+std::vector<int> calcLipinskiGhose(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcLipinskiGhose(ctx);
+}
+
+double calcMcGowanVolume(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   // In Padel code this is /100 in order to match the Polarisability equation
   double res = 0.;
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
 
   const std::map<int, double> &mgvmap = McGowanVolumAtomicMap();
 
@@ -1489,6 +1520,11 @@ double calcMcGowanVolume(const ROMol &mol) {
   double finalres = res - hmol->getNumBonds() * 6.56;
 
   return finalres;
+}
+
+double calcMcGowanVolume(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcMcGowanVolume(ctx);
 }
 
 // SMARTS patterns for fragments
@@ -1599,11 +1635,12 @@ double calcSchultz(const ROMol &mol) {
 }
 
 // Combined function for calculating both atomic and bond polarizability
-std::vector<double> calcPolarizability(const ROMol &mol) {
+std::vector<double> calcPolarizability(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   double atomicPol = 0.0;
   double bondPol = 0.0;
   const auto &polmap = Polarizability94AtomicMap();
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
 
   for (const auto &atom : hmol->atoms()) {
     int atomicNum = atom->getAtomicNum();
@@ -1626,6 +1663,11 @@ std::vector<double> calcPolarizability(const ROMol &mol) {
   }
 
   return {atomicPol, bondPol};
+}
+
+std::vector<double> calcPolarizability(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcPolarizability(ctx);
 }
 
 // Main Rotatabond
@@ -1712,7 +1754,8 @@ std::vector<std::vector<int>> findRings(const ROMol &mol) {
 // p    polarizability94[a.GetAtomicNum()] (last as default!!!)
 // i    ionization_potentials[a.GetAtomicNum()]
 
-std::vector<double> calcConstitutional(const ROMol &mol) {
+std::vector<double> calcConstitutional(OsmordredContext &ctx) {
+  const ROMol &mol = ctx.mol();
   double SZ = 0.;
   double Sm = 0.;
   double Sv = 0.;
@@ -1723,7 +1766,7 @@ std::vector<double> calcConstitutional(const ROMol &mol) {
   double Si = 0.;
   double MZ, Mm, Mv, Mse, Mpe, Mare, Mp, Mi;
   const PeriodicTable *tbl = PeriodicTable::getTable();
-  std::unique_ptr<ROMol> hmol(MolOps::addHs(mol));
+  const ROMol *hmol = &ctx.molWithHs();
 
   double zcc = static_cast<double>(tbl->getAtomicNumber("C"));
 
@@ -1785,6 +1828,11 @@ std::vector<double> calcConstitutional(const ROMol &mol) {
 
   return {SZ, Sm, Sv, Sse, Spe, Sare, Sp, Si,
           MZ, Mm, Mv, Mse, Mpe, Mare, Mp, Mi};
+}
+
+std::vector<double> calcConstitutional(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcConstitutional(ctx);
 }
 
 ////// Barysz Matrixes Eigen style

@@ -777,6 +777,15 @@ unsigned int countUniqueMatches(const ROMol &mol, const ROMol &queryMol) {
   return matches.size();
 }
 
+const ROMol &OsmordredContext::molWithHs() {
+  if (!d_molWithHs || !d_molWithHsShared) {
+    d_molWithHsShared = d_mol.getRingInfo() &&
+                        d_mol.getRingInfo()->isSssrOrBetter();
+    d_molWithHs.reset(MolOps::addHs(d_mol));
+  }
+  return *d_molWithHs;
+}
+
 #ifndef RDK_OSMORDRED_USE_LAPACKE
 // Same cascade and the same failure criteria as the LAPACKE branch below, so
 // both backends take the same branch for a given matrix:
