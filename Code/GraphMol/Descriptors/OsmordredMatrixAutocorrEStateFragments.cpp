@@ -38,6 +38,7 @@
 #include <RDGeneral/Invariant.h>
 #include <GraphMol/SanitException.h>
 #include <GraphMol/RDKitBase.h>
+#include <GraphMol/QueryOps.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/SmilesParse/SmilesWrite.h>
@@ -4992,7 +4993,7 @@ static const std::vector<std::string> frags = {
     "[PX5](=[OX1])([OX2H])[OX2H]",
     "[PX6](=[OX1])([OX1-])([OX1-])[OX1-]"};
 
-static const std::vector<std::shared_ptr<RWMol>> GetQueriesFrags() {
+static const std::vector<std::shared_ptr<RWMol>> &GetQueriesFrags() {
   static const std::vector<std::shared_ptr<RWMol>> queriesFrags = [] {
     std::vector<std::shared_ptr<RWMol>> res;
     for (const auto &smi : frags) {
@@ -5008,13 +5009,104 @@ static const std::vector<std::shared_ptr<RWMol>> GetQueriesFrags() {
   return queriesFrags;
 }
 
+namespace {
+using AtomQuery = Queries::Query<int, Atom const *, true>;
+
+bool hasRecursiveQuery(const AtomQuery *query) {
+  if (query->getDescription() == "RecursiveStructure") {
+    return true;
+  }
+  for (auto child = query->beginChildren(); child != query->endChildren();
+       ++child) {
+    if (hasRecursiveQuery(child->get())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool queryMolMayMatch(const ROMol &mol, const ROMol &queryMol);
+
+// Conservative screen: false only if no atom of mol can satisfy the query.
+// Parts without recursive SMARTS are tested with Query::Match, exactly the
+// test the substructure matcher applies; a recursive SMARTS can only be
+// satisfied if its own query molecule passes the screen.
+bool atomQueryMayMatch(const ROMol &mol, const AtomQuery *query) {
+  if (!hasRecursiveQuery(query)) {
+    for (const auto atom : mol.atoms()) {
+      if (query->Match(atom)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (query->getNegation()) {
+    return true;
+  }
+  const auto &description = query->getDescription();
+  if (description == "RecursiveStructure") {
+    const auto *queryMol =
+        static_cast<const RecursiveStructureQuery *>(query)->getQueryMol();
+    return !queryMol || queryMolMayMatch(mol, *queryMol);
+  }
+  if (description == "AtomOr") {
+    for (auto child = query->beginChildren(); child != query->endChildren();
+         ++child) {
+      if (atomQueryMayMatch(mol, child->get())) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (description == "AtomAnd") {
+    for (auto child = query->beginChildren(); child != query->endChildren();
+         ++child) {
+      if (!atomQueryMayMatch(mol, child->get())) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return true;
+}
+
+// false only if some atom of queryMol can match no atom of mol, in which case
+// SubstructMatch(mol, queryMol) finds nothing.
+bool queryMolMayMatch(const ROMol &mol, const ROMol &queryMol) {
+  for (const auto queryAtom : queryMol.atoms()) {
+    if (queryAtom->hasQuery()) {
+      if (!atomQueryMayMatch(mol, queryAtom->getQuery())) {
+        return false;
+      }
+    } else {
+      bool found = false;
+      for (const auto atom : mol.atoms()) {
+        if (queryAtom->Match(atom)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+}  // namespace
+
 std::vector<double> calcFrags(const ROMol &mol) {
-  auto queriesFrags = GetQueriesFrags();
+  const auto &queriesFrags = GetQueriesFrags();
   std::vector<double> retval(queriesFrags.size(), 0.0);
 
   try {
     // Calculate A descriptor
     for (size_t i = 0; i < queriesFrags.size(); ++i) {
+      // skipping a query that cannot match leaves its count at zero; most
+      // fragment counts are zero
+      if (!queryMolMayMatch(mol, *queriesFrags[i])) {
+        continue;
+      }
       std::vector<MatchVectType> matches;
       SubstructMatch(mol, *queriesFrags[i], matches, true);  // uniquify = true
       retval[i] = matches.size();
