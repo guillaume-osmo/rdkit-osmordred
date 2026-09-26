@@ -98,21 +98,6 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
   // Always compute the full v2 set; keep signature for ABI stability
   const bool doExEstate = true;
 
-  // Precompute/cached intermediates where safe
-  // Note: We do not change algorithms; just reuse intermediates across calls
-  std::unique_ptr<RWMol> kekulizedMol(new RWMol(mol));
-  try {
-    MolOps::Kekulize(*kekulizedMol, false);
-  } catch (...) {
-    // leave kekulizedMol as-is when kekulization fails
-  }
-
-  // No shared matrix caching in baseline fast path
-
-  // Some families already build needed matrices internally; where public
-  // helpers exist (e.g., Adj/Dist matrices), we call the descriptor that
-  // accepts version flags so we do not duplicate logic.
-
   auto checkTimeout = [&]() {
     if (end_time && Clock::now() >= *end_time) {
       std::cerr << "*" << std::endl;
