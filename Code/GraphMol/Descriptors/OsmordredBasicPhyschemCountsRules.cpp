@@ -177,9 +177,7 @@ int countMatches(const ROMol &mol,
   int count = 0;
   for (const auto &pattern : patterns) {
     if (pattern) {
-      std::vector<MatchVectType> matches;
-      SubstructMatch(mol, *pattern, matches);
-      count += matches.size();
+      count += countUniqueMatches(mol, *pattern);
     }
   }
   return count;
@@ -215,9 +213,7 @@ std::vector<int> countHydroxylGroups(const ROMol &mol) {
   std::vector<int> results(3, 0);
 
   for (size_t i = 0; i < GetAlcoholSmarts().size(); ++i) {
-    std::vector<MatchVectType> matches;
-    SubstructMatch(mol, *GetAlcoholSmarts()[i], matches);
-    results[i] = matches.size();
+    results[i] = countUniqueMatches(mol, *GetAlcoholSmarts()[i]);
   }
 
   return results;
@@ -1462,12 +1458,9 @@ double calcLogS(const ROMol &mol) {
       continue;  // Skip invalid SMARTS
     }
 
-    // Match SMARTS pattern
-    std::vector<MatchVectType> matches;
-    SubstructMatch(mol, *smartsMol, matches);
-
-    // Add contributions for each match
-    logS += matches.size() * logContribution;
+    // Add contributions for each (unique) match
+    const size_t nMatches = countUniqueMatches(mol, *smartsMol);
+    logS += nMatches * logContribution;
   }
 
   return logS;
@@ -1606,9 +1599,8 @@ double calcPol(const ROMol &mol) {
     auto &pattern = GetCompiledPolFrags()[i];
     if (!pattern) continue;  // Skip invalid patterns
 
-    std::vector<MatchVectType> matches;
-    SubstructMatch(mol, *pattern, matches, true);  // uniquify = true
-    res += matches.size() * coefPol[i];
+    const size_t nMatches = countUniqueMatches(mol, *pattern);
+    res += nMatches * coefPol[i];
   }
 
   // Add hydrogen contribution
