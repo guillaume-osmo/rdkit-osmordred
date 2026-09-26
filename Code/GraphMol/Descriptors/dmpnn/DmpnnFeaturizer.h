@@ -22,6 +22,15 @@ constexpr unsigned int WHOLE_MOL_DIM = 11;   // on the hydrogen-explicit molecul
 constexpr unsigned int DESCRIPTOR_DIM = 217; // RDKit Descriptors._descList, arcsinh'd
 constexpr unsigned int MOL_DIM = WHOLE_MOL_DIM + DESCRIPTOR_DIM;
 
+//! Which RDKit definitions to use for the two descriptors that changed after 2025.09.
+//!  - RDKit2025: NumHAcceptors and the strict NumRotatableBonds as RDKit 2025.09.x
+//!    computed them -- the release the shipped weights were trained with. Use it to
+//!    reproduce the trained input exactly.
+//!  - Current:   the linked RDKit's definitions, i.e. the upstream fixes #9060
+//!    (degree-3 aromatic N is not an acceptor) and #9096 (methyl rotors are not
+//!    rotatable bonds). The corrected features, for retraining.
+enum class Definitions { RDKit2025, Current };
+
 struct Graph {
   int nNodes = 0;
   int nEdges = 0;
@@ -32,22 +41,24 @@ struct Graph {
 };
 
 //! Featurize `mol` (as parsed from SMILES, no explicit hydrogens).
-RDKIT_DESCRIPTORS_EXPORT Graph featurize(const ROMol &mol);
+RDKIT_DESCRIPTORS_EXPORT Graph featurize(const ROMol &mol,
+                                         Definitions defs = Definitions::RDKit2025);
 
 //! The graph in `predict`'s little-endian layout:
 //! int32 n_nodes, n_edges, node_dim, edge_dim, mol_dim; float32 x, edge_attr;
 //! int32 src, dst, rev; float32 mol.
 RDKIT_DESCRIPTORS_EXPORT std::string graphBytes(const Graph &graph);
 
-//! RDKit's 217 descriptors (Descriptors._descList order, raw values) with the
-//! definition that changed after RDKit 2025.09 restored, so values match what a
-//! 2025.09.x Python produced: NumHAcceptors uses the 2025 SMARTS (RDKit #9060
-//! later excluded degree-3 aromatic N). NumRotatableBonds needs no change here:
-//! on the hydrogen-suppressed molecule both releases agree.
-RDKIT_DESCRIPTORS_EXPORT std::vector<double> rdkit217Compat2025(const ROMol &mol);
+//! RDKit's 217 descriptors (Descriptors._descList order, raw values). With
+//! RDKit2025, NumHAcceptors uses the 2025 SMARTS; NumRotatableBonds needs no change
+//! in this block because on the hydrogen-suppressed molecule both releases agree
+//! (a CH3 is D1 there, already excluded by the pattern).
+RDKIT_DESCRIPTORS_EXPORT std::vector<double> rdkit217(const ROMol &mol,
+                                                      Definitions defs);
 
 //! The 228-value molecule block alone (11 whole-molecule columns ++ 217 descriptors).
-RDKIT_DESCRIPTORS_EXPORT std::vector<float> molBlock(const ROMol &mol);
+RDKIT_DESCRIPTORS_EXPORT std::vector<float> molBlock(
+    const ROMol &mol, Definitions defs = Definitions::RDKit2025);
 
 }  // namespace DmpnnFeaturizer
 }  // namespace RDKit

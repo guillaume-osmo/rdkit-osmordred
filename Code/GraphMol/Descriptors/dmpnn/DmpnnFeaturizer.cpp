@@ -251,7 +251,8 @@ int numHAcceptorsIndex() {
 }
 
 // _whole_molecule(work): the 11 columns on the hydrogen-explicit molecule.
-void wholeMolecule(const RWMol &work, std::vector<float> &out) {
+void wholeMolecule(const RWMol &work, Definitions defs, std::vector<float> &out) {
+  const bool legacy = defs == Definitions::RDKit2025;
   int heavy = 0, charge = 0;
   for (const auto atom : work.atoms()) {
     heavy += atom->getAtomicNum() > 1;
@@ -267,8 +268,9 @@ void wholeMolecule(const RWMol &work, std::vector<float> &out) {
       logp,
       Descriptors::calcTPSA(work, false, false),
       static_cast<double>(Descriptors::calcNumRings(work)),
-      static_cast<double>(numRotatableBonds2025(work)),
-      static_cast<double>(numHBA2025(work)),
+      static_cast<double>(legacy ? numRotatableBonds2025(work)
+                                 : Descriptors::calcNumRotatableBonds(work, Descriptors::Strict)),
+      static_cast<double>(legacy ? numHBA2025(work) : Descriptors::calcNumHBA(work)),
       static_cast<double>(Descriptors::calcNumHBD(work)),
       static_cast<double>(charge),
   };
@@ -279,8 +281,8 @@ void wholeMolecule(const RWMol &work, std::vector<float> &out) {
 
 // _descriptors(mol): float64 -> float32, non-finite -> NaN, float32 inf -> NaN,
 // NaN -> 0, then np.arcsinh on the float32 array (float32 arithmetic).
-void descriptors(const ROMol &mol, std::vector<float> &out) {
-  const auto raw = rdkit217Compat2025(mol);
+void descriptors(const ROMol &mol, Definitions defs, std::vector<float> &out) {
+  const auto raw = rdkit217(mol, defs);
   for (unsigned int i = 0; i < DESCRIPTOR_DIM; ++i) {
     const double v = i < raw.size() ? raw[i] : std::numeric_limits<double>::quiet_NaN();
     float f = std::isfinite(v) ? static_cast<float>(v)
@@ -299,36 +301,36 @@ void appendRaw(std::string &buf, const T *data, size_t n) {
 
 }  // namespace
 
-std::vector<double> rdkit217Compat2025(const ROMol &mol) {
+std::vector<double> rdkit217(const ROMol &mol, Definitions defs) {
   auto values = Descriptors::Osmordred::extractRDKitDescriptors(mol);
   const int k = numHAcceptorsIndex();
-  if (k >= 0 && k < static_cast<int>(values.size())) {
+  if (defs == Definitions::RDKit2025 && k >= 0 && k < static_cast<int>(values.size())) {
     values[k] = static_cast<double>(numHBA2025(mol));
   }
   return values;
 }
 
-std::vector<float> molBlock(const ROMol &mol) {
+std::vector<float> molBlock(const ROMol &mol, Definitions defs) {
   RWMol work(mol);
   MolOps::addHs(work);
   std::vector<int> unused = atomTypes(work);  // the MMFF mutation happens first
   (void)unused;
   std::vector<float> block;
   block.reserve(MOL_DIM);
-  wholeMolecule(work, block);
-  descriptors(mol, block);
+  wholeMolecule(work, defs, block);
+  descriptors(mol, defs, block);
   return block;
 }
 
-Graph featurize(const ROMol &mol) {
+Graph featurize(const ROMol &mol, Definitions defs) {
   Graph g;
   RWMol work(mol);
   MolOps::addHs(work);
   nodes(work, g);
   edges(work, g);
   g.mol.reserve(MOL_DIM);
-  wholeMolecule(work, g.mol);
-  descriptors(mol, g.mol);
+  wholeMolecule(work, defs, g.mol);
+  descriptors(mol, defs, g.mol);
   return g;
 }
 
