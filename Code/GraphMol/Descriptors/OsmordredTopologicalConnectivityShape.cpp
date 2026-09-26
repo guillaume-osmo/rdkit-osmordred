@@ -1877,10 +1877,13 @@ std::vector<double> calculateEtaVEMCount(const ROMol &mol) {
   };
 }
 
-// Sum of the ETA composite index over atom pairs of targetMol (all
-// connected pairs, or bonded pairs only when local is set), not averaged.
-double calculateEtaCompositeSum(const ROMol &targetMol, bool local) {
-  Eigen::MatrixXd distanceMatrix = calculateDistanceMatrix(targetMol);
+// Sums of the ETA composite index over the atom pairs of targetMol: over all
+// connected pairs (first) and over bonded pairs only (second), not averaged.
+// distanceMatrix is the topological distance matrix of targetMol; the
+// callers pass the one of the input molecule, which has the same atoms and
+// bonds (targetMol is a kekulized or reference-skeleton copy of it).
+std::pair<double, double> calculateEtaCompositeSums(
+    const ROMol &targetMol, const Eigen::MatrixXd &distanceMatrix) {
   int numAtoms = targetMol.getNumAtoms();
 
   std::vector<double> gamma(numAtoms, 0.0);
@@ -1889,16 +1892,19 @@ double calculateEtaCompositeSum(const ROMol &targetMol, bool local) {
   }
 
   // ETA calculation "triangle computation" ie  j = i + 1 trick to go faster
-  double eta = 0.0;
+  double eta = 0.0, etaLocal = 0.0;
   for (int i = 0; i < numAtoms; ++i) {
     for (int j = i + 1; j < numAtoms; ++j) {
-      if (local && distanceMatrix(i, j) != 1.0) continue;
-      if (!local && distanceMatrix(i, j) == 0.0) continue;
-      eta += std::sqrt(gamma[i] * gamma[j] /
-                       (distanceMatrix(i, j) * distanceMatrix(i, j)));
+      const double dij = distanceMatrix(i, j);
+      if (dij == 0.0) continue;
+      const double term = std::sqrt(gamma[i] * gamma[j] / (dij * dij));
+      eta += term;
+      if (dij == 1.0) {
+        etaLocal += term;
+      }
     }
   }
-  return eta;
+  return {eta, etaLocal};
 }
 
 std::vector<double> calculateEtaBranchingIndices(const ROMol &mol,
@@ -2136,10 +2142,16 @@ std::vector<double> calcExtendedTopochemicalAtom(const ROMol &mol) {
   const double numAtoms = kekulizedMol->getNumAtoms();
   std::unique_ptr<RWMol> refMol(
       cloneAndModifyMolecule(*kekulizedMol, false, false));
-  const double eta = calculateEtaCompositeSum(*kekulizedMol, false);
-  const double eta_L = calculateEtaCompositeSum(*kekulizedMol, true);
-  const double eta_R = refMol ? calculateEtaCompositeSum(*refMol, false) : nan;
-  const double eta_RL = refMol ? calculateEtaCompositeSum(*refMol, true) : nan;
+  // the kekulized molecule and the reference skeleton have the atoms and
+  // bonds of mol, hence its (cached) topological distance matrix
+  const Eigen::MatrixXd distanceMatrix = calculateDistanceMatrix(mol);
+  const auto [eta, eta_L] =
+      calculateEtaCompositeSums(*kekulizedMol, distanceMatrix);
+  double eta_R = nan, eta_RL = nan;
+  if (refMol) {
+    std::tie(eta_R, eta_RL) =
+        calculateEtaCompositeSums(*refMol, distanceMatrix);
+  }
 
   // ETA Descriptors   ==  "EtaCompositeIndex"
   if (refMol) {
