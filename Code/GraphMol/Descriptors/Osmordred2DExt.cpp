@@ -27,7 +27,9 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <limits>
@@ -380,66 +382,78 @@ unsigned int calcNumCircuits(const ROMol &mol) {
     return 0;
   }
   // GF(2) sums over the SSSR basis; keep each result that is a single connected cycle.
-  std::set<std::set<int>> seen;
+  // Bond sets are bit masks (one bit per bond), so the symmetric difference is an XOR.
+  const unsigned int nBonds = mol.getNumBonds();
+  const size_t nWords = (nBonds + 63) / 64;
+  std::vector<std::vector<std::uint64_t>> ringBits(
+      nr, std::vector<std::uint64_t>(nWords, 0));
+  for (size_t r = 0; r < nr; ++r) {
+    for (int bidx : bondRings[r]) {
+      ringBits[r][bidx / 64] ^= std::uint64_t(1) << (bidx % 64);
+    }
+  }
+  const unsigned int nAtoms = mol.getNumAtoms();
+  std::vector<int> deg(nAtoms, 0);
+  std::vector<std::array<int, 2>> nbrs(nAtoms);
+  std::vector<int> touched;
+  std::vector<std::uint64_t> cyc(nWords);
+  std::set<std::vector<std::uint64_t>> seen;
   unsigned int count = 0;
   const size_t combos = (nr < 20) ? (1u << nr) : (1u << 20);
   for (size_t mask = 1; mask < combos; ++mask) {
-    std::set<int> cyc;
+    std::fill(cyc.begin(), cyc.end(), 0);
     for (size_t r = 0; r < nr && r < 20; ++r) {
       if (!(mask & (1u << r))) {
         continue;
       }
-      for (int bidx : bondRings[r]) {
-        auto it = cyc.find(bidx);
-        if (it == cyc.end()) {
-          cyc.insert(bidx);
-        } else {
-          cyc.erase(it);  // symmetric difference
-        }
+      for (size_t w = 0; w < nWords; ++w) {
+        cyc[w] ^= ringBits[r][w];
       }
-    }
-    if (cyc.empty()) {
-      continue;
     }
     // every vertex must have degree 2 ...
-    std::unordered_map<int, int> deg;
-    std::unordered_map<int, std::vector<int>> adj;
-    for (int bidx : cyc) {
-      const Bond *b = mol.getBondWithIdx(static_cast<unsigned int>(bidx));
-      const int u = static_cast<int>(b->getBeginAtomIdx());
-      const int v = static_cast<int>(b->getEndAtomIdx());
-      ++deg[u];
-      ++deg[v];
-      adj[u].push_back(v);
-      adj[v].push_back(u);
-    }
+    touched.clear();
     bool allTwo = true;
-    for (const auto &kv : deg) {
-      if (kv.second != 2) {
-        allTwo = false;
-        break;
-      }
-    }
-    if (!allTwo) {
-      continue;
-    }
-    // ... AND the edge set must be connected, or it is two disjoint cycles, not one.
-    std::set<int> vis;
-    std::vector<int> stack{adj.begin()->first};
-    vis.insert(stack.front());
-    while (!stack.empty()) {
-      const int x = stack.back();
-      stack.pop_back();
-      for (int y : adj[x]) {
-        if (vis.insert(y).second) {
-          stack.push_back(y);
+    for (size_t w = 0; w < nWords && allTwo; ++w) {
+      for (std::uint64_t bits = cyc[w]; bits && allTwo; bits &= bits - 1) {
+        const int bidx = static_cast<int>(w * 64) + std::countr_zero(bits);
+        const Bond *b = mol.getBondWithIdx(static_cast<unsigned int>(bidx));
+        const int ends[2] = {static_cast<int>(b->getBeginAtomIdx()),
+                             static_cast<int>(b->getEndAtomIdx())};
+        for (int e = 0; e < 2; ++e) {
+          const int u = ends[e];
+          if (deg[u] == 0) {
+            touched.push_back(u);
+          }
+          if (deg[u] == 2) {
+            allTwo = false;  // a third bond at u
+            break;
+          }
+          nbrs[u][deg[u]++] = ends[1 - e];
         }
       }
     }
-    if (vis.size() != deg.size()) {
-      continue;
+    bool isCycle = allTwo && !touched.empty();
+    for (int u : touched) {
+      if (deg[u] != 2) {
+        isCycle = false;
+      }
     }
-    if (seen.insert(cyc).second) {
+    // ... AND the edge set must be connected, or it is two disjoint cycles, not one.
+    if (isCycle) {
+      size_t visited = 1;
+      int prev = touched.front(), cur = nbrs[prev][0];
+      while (cur != touched.front()) {
+        const int next = nbrs[cur][0] == prev ? nbrs[cur][1] : nbrs[cur][0];
+        prev = cur;
+        cur = next;
+        ++visited;
+      }
+      isCycle = visited == touched.size();
+    }
+    for (int u : touched) {
+      deg[u] = 0;
+    }
+    if (isCycle && seen.insert(cyc).second) {
       ++count;
     }
   }
