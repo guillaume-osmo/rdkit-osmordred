@@ -136,6 +136,16 @@ ChiType classifySubgraph(const std::set<int> &degrees, bool isChain);
 ChiType classifySubgraph(const RDKit::ROMol &mol,
                          const std::vector<int> &bondPath);
 
+//! Classifies a connected bond subgraph (as returned by
+//! findAllSubgraphsOfLengthN) as Chain/Path/PathCluster/Cluster. On return
+//! \c atoms holds the subgraph's atom indices in ascending order.
+//! \c degreeScratch must have at least getNumAtoms() zero entries; it is
+//! left zeroed so it can be reused across calls without reallocation.
+ChiType classifyBondSubgraph(const RDKit::ROMol &mol,
+                             const std::vector<int> &bondPath,
+                             std::vector<int> &degreeScratch,
+                             std::vector<int> &atoms);
+
 std::vector<std::tuple<std::vector<int>, std::set<int>, ChiType>>
 extractAndClassifyPaths(const RDKit::ROMol &mol, unsigned int targetLength,
                         bool useHs);

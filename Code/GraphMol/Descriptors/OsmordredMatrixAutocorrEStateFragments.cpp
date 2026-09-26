@@ -1339,60 +1339,44 @@ std::vector<double> calcAllChiDescriptors(const ROMol &mol) {
   results[40] = path_0_xdv;                      // Total Xp-0dv
   results[48] = path_0_xdv / mol.getNumAtoms();  // Average Xp-0dv
 
-  for (int order = 1; order <= 7; ++order) {
-    auto classifiedPaths = extractAndClassifyPaths(mol, order, false);
+  // One enumeration of all subgraphs of 1..7 bonds; per length it yields the
+  // same subgraphs in the same order as findAllSubgraphsOfLengthN.
+  auto subgraphsByOrder = findAllSubgraphsOfLengthsMtoN(mol, 1, 7, false);
+  std::vector<int> degreeScratch(mol.getNumAtoms(), 0);
+  std::vector<int> nodes;
 
+  for (int order = 1; order <= 7; ++order) {
     double chain_xd = 0.0, chain_xdv = 0.0;
     double cluster_xd = 0.0, cluster_xdv = 0.0;
     double pathcluster_xd = 0.0, pathcluster_xdv = 0.0;
 
-    for (const auto &[bonds, nodes, type] : classifiedPaths) {
+    for (const auto &bonds : subgraphsByOrder[order]) {
+      const ChiType type =
+          classifyBondSubgraph(mol, bonds, degreeScratch, nodes);
+      double *xd = nullptr, *xdv = nullptr;
       if (type == ChiType::Chain && order >= 3 && order <= 7) {
-        double cd = 1.0, cdv = 1.0;
-        for (const auto &node : nodes) {
-          const Atom *at = mol.getAtomWithIdx(node);
-          double d = getSigmaElectrons(*at);  // d
-          cd *= d;
-          double dv = getValenceElectrons(*at);  // dv
-          cdv *= dv;
-        }
-        chain_xd += 1.0 / std::sqrt(cd);
-        chain_xdv += 1.0 / std::sqrt(cdv);
+        xd = &chain_xd;
+        xdv = &chain_xdv;
       } else if (type == ChiType::Cluster && order >= 3 && order <= 6) {
-        double cd = 1.0, cdv = 1.0;
-        for (const auto &node : nodes) {
-          const Atom *at = mol.getAtomWithIdx(node);
-          double d = getSigmaElectrons(*at);  // d
-          cd *= d;
-          double dv = getValenceElectrons(*at);  // dv
-          cdv *= dv;
-        }
-        cluster_xd += 1.0 / std::sqrt(cd);
-        cluster_xdv += 1.0 / std::sqrt(cdv);
+        xd = &cluster_xd;
+        xdv = &cluster_xdv;
       } else if (type == ChiType::PathCluster && order >= 4 && order <= 6) {
-        double cd = 1.0, cdv = 1.0;
-        for (const auto &node : nodes) {
-          const Atom *at = mol.getAtomWithIdx(node);
-          double d = getSigmaElectrons(*at);  // d
-          cd *= d;
-          double dv = getValenceElectrons(*at);  // dv
-          cdv *= dv;
-        }
-        pathcluster_xd += 1.0 / std::sqrt(cd);
-        pathcluster_xdv += 1.0 / std::sqrt(cdv);
+        xd = &pathcluster_xd;
+        xdv = &pathcluster_xdv;
       } else if (type == ChiType::Path) {
-        double cd = 1.0, cdv = 1.0;
-        for (const auto &node : nodes) {
-          const Atom *at = mol.getAtomWithIdx(node);
-          double d = getSigmaElectrons(*at);  // d
-          cd *= d;
-          double dv = getValenceElectrons(*at);  // dv
-          cdv *= dv;
-        }
         path_node_counts[order] += 1;
-        path_xd[order] += 1.0 / std::sqrt(cd);
-        path_xdv[order] += 1.0 / std::sqrt(cdv);
+        xd = &path_xd[order];
+        xdv = &path_xdv[order];
+      } else {
+        continue;
       }
+      double cd = 1.0, cdv = 1.0;
+      for (const auto node : nodes) {
+        cd *= sigmaElectrons[node];      // d
+        cdv *= valenceElectrons[node];   // dv
+      }
+      *xd += 1.0 / std::sqrt(cd);
+      *xdv += 1.0 / std::sqrt(cdv);
     }
 
     // Update total Path values

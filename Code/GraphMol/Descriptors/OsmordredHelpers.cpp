@@ -536,59 +536,6 @@ const std::map<int, double> &ionizationEnergyAtomicMap() {
 }
 
 namespace {
-void performDFS(const RDKit::ROMol &mol, int startAtomIdx,
-                const std::vector<int> &path, std::set<int> &visitedNodes,
-                std::set<std::pair<int, int>> &visitedEdges,
-                std::set<int> &degrees, bool &isChain) {
-  std::set<int> pathBonds(path.begin(),
-                          path.end());  // Bonds in the path for quick lookup
-  std::unordered_map<int, std::set<int>>
-      neighbors;  // Neighbors in the subgraph
-
-  // Populate neighbors for the subgraph
-  for (int bondIdx : path) {
-    const auto *bond = mol.getBondWithIdx(bondIdx);
-    int begin = bond->getBeginAtomIdx();
-    int end = bond->getEndAtomIdx();
-    neighbors[begin].insert(end);
-    neighbors[end].insert(begin);
-  }
-
-  // Perform DFS
-  std::stack<int> stack;
-  std::unordered_map<int, int> parent;  // To track parent nodes in DFS
-  stack.push(startAtomIdx);
-  parent[startAtomIdx] = -1;  // Root node has no parent
-
-  while (!stack.empty()) {
-    int node = stack.top();
-    stack.pop();
-
-    if (visitedNodes.count(node)) {
-      continue;
-    }
-
-    visitedNodes.insert(node);
-
-    // Calculate degree for this node based on subgraph neighbors
-    int degree = neighbors[node].size();
-    degrees.insert(degree);  // Add degree to the set
-
-    // Traverse neighbors in the subgraph
-    for (int neighbor : neighbors[node]) {
-      std::pair<int, int> edge = std::minmax(node, neighbor);
-
-      if (!visitedNodes.count(neighbor)) {
-        stack.push(neighbor);
-        parent[neighbor] = node;  // Set parent for the neighbor
-        visitedEdges.insert(edge);
-      } else if (parent[node] != neighbor) {  // Detect back edge
-        isChain = true;                       // Cycle detected
-      }
-    }
-  }
-}
-
 bool allDegreesAreOneOrTwo(const std::set<int> &degrees) {
   return std::all_of(degrees.begin(), degrees.end(),
                      [](int d) { return d == 1 || d == 2; });
@@ -648,6 +595,47 @@ ChiType classifySubgraph(const RDKit::ROMol &mol,
   }
 }
 
+ChiType classifyBondSubgraph(const RDKit::ROMol &mol,
+                             const std::vector<int> &bondPath,
+                             std::vector<int> &degreeScratch,
+                             std::vector<int> &atoms) {
+  PRECONDITION(degreeScratch.size() >= mol.getNumAtoms(),
+               "degreeScratch too small");
+  atoms.clear();
+  for (int bondIdx : bondPath) {
+    const auto *bond = mol.getBondWithIdx(bondIdx);
+    for (int atomIdx :
+         {static_cast<int>(bond->getBeginAtomIdx()),
+          static_cast<int>(bond->getEndAtomIdx())}) {
+      if (degreeScratch[atomIdx]++ == 0) {
+        atoms.push_back(atomIdx);
+      }
+    }
+  }
+  bool hasDegreeTwo = false;
+  bool allDegreesOneOrTwo = true;
+  for (int atomIdx : atoms) {
+    const int degree = degreeScratch[atomIdx];
+    hasDegreeTwo |= (degree == 2);
+    allDegreesOneOrTwo &= (degree <= 2);
+    degreeScratch[atomIdx] = 0;
+  }
+  std::sort(atoms.begin(), atoms.end());
+
+  // The subgraphs are connected, so they contain a cycle exactly when they
+  // have at least as many bonds as atoms. Decision tree: Chain first, then
+  // only degrees 1 and 2 => Path, then any degree 2 => PathCluster, else
+  // Cluster.
+  if (!bondPath.empty() && bondPath.size() >= atoms.size()) {
+    return ChiType::Chain;
+  } else if (allDegreesOneOrTwo) {
+    return ChiType::Path;
+  } else if (hasDegreeTwo) {
+    return ChiType::PathCluster;
+  }
+  return ChiType::Cluster;
+}
+
 // Main function to extract and classify subgraphs
 std::vector<std::tuple<std::vector<int>, std::set<int>, ChiType>>
 extractAndClassifyPaths(const RDKit::ROMol &mol, unsigned int targetLength,
@@ -661,34 +649,12 @@ extractAndClassifyPaths(const RDKit::ROMol &mol, unsigned int targetLength,
             // Path ...! maybe we can leverage that except if it is too
             // expensive...
 
+  results.reserve(paths.size());
+  std::vector<int> degreeScratch(mol.getNumAtoms(), 0);
+  std::vector<int> atoms;
   for (const auto &path : paths) {
-    // Prepare sets for DFS traversal
-    std::set<int> visitedNodes;
-    std::set<std::pair<int, int>> visitedEdges;
-    std::set<int> degrees;
-    bool isChain = false;
-
-    // Start DFS from the first bond in the path
-    if (!path.empty()) {
-      int startAtomIdx = mol.getBondWithIdx(path.front())->getBeginAtomIdx();
-      performDFS(mol, startAtomIdx, path, visitedNodes, visitedEdges, degrees,
-                 isChain);
-    }
-
-    // If a cycle is detected, it's a Chain Path by definitin of the isChain
-    // bool flag from DFS code this is a decision tree: Chain first than only 1
-    // and 2 => Path than has 2 => Path Cluster else Cluster!
-    ChiType type;
-    if (isChain) {
-      type = ChiType::Chain;
-    } else if (allDegreesAreOneOrTwo(degrees)) {
-      type = ChiType::Path;
-    } else if (degrees.count(2)) {
-      type = ChiType::PathCluster;
-    } else {
-      type = ChiType::Cluster;
-    }
-    results.emplace_back(path, visitedNodes, type);
+    const ChiType type = classifyBondSubgraph(mol, path, degreeScratch, atoms);
+    results.emplace_back(path, std::set<int>(atoms.begin(), atoms.end()), type);
   }
   return results;
 }
