@@ -1534,11 +1534,12 @@ std::vector<double> calcAllChiDescriptors(const ROMol &mol) {
 
 ///////
 // Define the graph as an adjacency list
-using Graph = std::unordered_map<int, std::vector<std::pair<int, double>>>;
+// neighbours (atom index, edge weight) of every atom, in bond order
+using Graph = std::vector<std::vector<std::pair<int, double>>>;
 
 // Build the molecular graph
 Graph buildGraph(const ROMol &mol) {
-  Graph graph;
+  Graph graph(mol.getNumAtoms());
   for (const auto &bond : mol.bonds()) {
     int start = bond->getBeginAtomIdx();
     int end = bond->getEndAtomIdx();
@@ -1553,18 +1554,14 @@ Graph buildGraph(const ROMol &mol) {
 
 // Recursive DFS for atomic ID computation
 double computeAtomicId(const Graph &graph, int atomIdx, double epsilon,
-                       double currentWeight, std::unordered_set<int> &visited,
+                       double currentWeight, std::vector<char> &visited,
                        double limit) {
   double id = 0.0;
 
-  visited.insert(atomIdx);
+  visited[atomIdx] = 1;
 
-  // Graphs can have single atoms
-  auto res = graph.find(atomIdx);
-  if (res == graph.end()) return id;
-
-  for (const auto &[nextAtom, edgeWeight] : res->second) {
-    if (visited.count(nextAtom)) continue;
+  for (const auto &[nextAtom, edgeWeight] : graph[atomIdx]) {
+    if (visited[nextAtom]) continue;
 
     double combinedWeight = currentWeight * edgeWeight;
 
@@ -1576,7 +1573,7 @@ double computeAtomicId(const Graph &graph, int atomIdx, double epsilon,
     }
   }
 
-  visited.erase(atomIdx);  // Backtrack
+  visited[atomIdx] = 0;  // Backtrack
   return id;
 }
 
@@ -1588,8 +1585,8 @@ std::vector<double> computeAtomicIds(const ROMol &mol, double epsilon) {
   Graph graph = buildGraph(mol);
   double limit = 1.0 / (epsilon * epsilon);
 
+  std::vector<char> visited(natoms, 0);
   for (int atomIdx = 0; atomIdx < natoms; ++atomIdx) {
-    std::unordered_set<int> visited;
     double id = computeAtomicId(graph, atomIdx, epsilon, 1.0, visited, limit);
     atomicIds[atomIdx] = 1.0 + id / 2.0;  // Normalize
   }
