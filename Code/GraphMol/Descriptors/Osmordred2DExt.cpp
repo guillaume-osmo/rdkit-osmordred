@@ -502,7 +502,8 @@ std::vector<double> calcBurdenEigenvalues(const ROMol &mol) {
   const std::unique_ptr<ROMol> molH(MolOps::addHs(mol));
   for (const auto &wp : burdenWeights()) {
     const Eigen::MatrixXd B = burdenMatrix(*molH, wp.second);
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B);
+    // only eigenvalues are used; skipping the eigenvectors leaves them unchanged
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(B, Eigen::EigenvaluesOnly);
     if (es.info() != Eigen::Success) {
       out.insert(out.end(), 16, kNaN);
       continue;
