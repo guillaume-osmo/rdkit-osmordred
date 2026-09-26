@@ -210,7 +210,9 @@ void edges(const RWMol &work, Graph &g) {
 // were trained with. RDKit 2026 (#9096, NumRotatableBondsVersion 3.1.0 -> 3.2.0) added
 // &!$([CH3]) to both ends of the strict pattern. On a hydrogen-explicit molecule that
 // stops counting every methyl rotor, which moves this column on ~77% of molecules
-// (the hydrogen-suppressed 217-descriptor block is unaffected). Counting follows
+// (the hydrogen-suppressed 217-descriptor block is unaffected). NonStrict is NOT a
+// substitute for the 2025 value: on AddHs molecules it disagrees with 2025.09 Strict on
+// 1662 of 3023 PubChem molecules, so the pre-#9096 pattern is reproduced verbatim. Counting follows
 // Lipinski.cpp's ss_matcher: uniquified SubstructMatch on a copy of the query,
 // because recursive queries are not thread safe.
 unsigned int numRotatableBonds2025(const ROMol &mol) {
