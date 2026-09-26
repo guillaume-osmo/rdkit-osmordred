@@ -320,9 +320,12 @@ Eigen::MatrixXd burdenMatrix(const ROMol &molH, WeightFn w) {
 // --------------------------------------------------------------------------
 enum PPP { P_DON = 0, P_ACC, P_POS, P_NEG, P_LIP, P_N };
 
+//! Parsed once; the lambda-initialised static makes the first call thread-safe
+//! (the previous `if (pats.empty()) push_back(...)` raced when two threads
+//! computed CATS2D for the first time concurrently).
 const std::vector<ROMol *> &pppPatterns() {
-  static std::vector<ROMol *> pats;
-  if (pats.empty()) {
+  static const std::vector<ROMol *> pats = [] {
+    std::vector<ROMol *> res;
     static const char *sm[P_N] = {
         "[$([N;!H0;v3,v4&+1]),$([O,S;H1;+0]),$([n;H1;+0])]",
         "[$([O,S;H1;v2;!$(*-*=[O,N,P,S])]),$([O,S;H0;v2]),$([O,S;-]),"
@@ -345,9 +348,10 @@ const std::vector<ROMol *> &pppPatterns() {
         "[$([C;!$(C=[O,N,S]);!$(C#N);!$(C[O,N])]),$([c]),$([Cl,Br,I]),"
         "$([S;D2;$(S(C)(C))])]"};
     for (int i = 0; i < P_N; ++i) {
-      pats.push_back(SmartsToMol(sm[i]));
+      res.push_back(SmartsToMol(sm[i]));
     }
-  }
+    return res;
+  }();
   return pats;
 }
 
