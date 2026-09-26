@@ -568,23 +568,16 @@ const std::vector<std::shared_ptr<RWMol>>& GetFragmentQueries() {
     return queries;
 }
 
-// Constants for molecule size limits to prevent hanging
-constexpr unsigned int MAX_HEAVY_ATOMS_RDKIT = 200;
-constexpr unsigned int MAX_RINGS_RDKIT = 30;
-
 // Extract all 217 RDKit descriptors in exact order matching Python's Descriptors._descList
 std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
     std::vector<double> descriptors;
     descriptors.reserve(217);
     
-    // Early exit for molecules that are too large (prevents hanging/timeout)
-    unsigned int nHeavyCheck = mol.getNumHeavyAtoms();
-    unsigned int nRingsCheck = RDKit::Descriptors::calcNumRings(mol);
-    if (nHeavyCheck > MAX_HEAVY_ATOMS_RDKIT || nRingsCheck > MAX_RINGS_RDKIT) {
-        // Return vector of NaN values (217 features)
-        return std::vector<double>(217, std::numeric_limits<double>::quiet_NaN());
-    }
-    
+    // No size cap: Python computes every molecule. Every descriptor Python
+    // would raise on is NaN here (CalcMolDescriptors(missingVal=NaN)).
+    // Cost note: Ipc/AvgIpc are O(n^3 * degree) in the atom count (n matrix
+    // products), as in Python.
+
     // Get some precomputed values
     double MW = calcAMW(mol);
     double exactMW = calcExactMW(mol);
@@ -648,122 +641,72 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
         // NOTE: Do NOT delete[] distances - RDKit caches it in molecule properties
         // The documentation says "The caller should NOT delete this pointer"
     } catch (...) {
-        estateIndices = std::vector<double>(mol.getNumAtoms(), 0.0);
+        estateIndices.clear();  // -> NaN below, as when Python raises
     }
 
-    // 0: MaxAbsEStateIndex
+    // 0-3: Max/MaxAbs/Min/MinAbs EState index: Python builtin max()/min() over
+    // the indices (first extreme wins); an empty sequence raises -> NaN.
     if (!estateIndices.empty()) {
-        double maxAbs = 0.0;
+        double maxAbs = std::fabs(estateIndices[0]);
+        double maxV = estateIndices[0];
+        double minAbs = std::fabs(estateIndices[0]);
+        double minV = estateIndices[0];
         for (double v : estateIndices) {
-            double absV = std::abs(v);
+            const double absV = std::fabs(v);
             if (absV > maxAbs) maxAbs = absV;
-        }
-        descriptors.push_back(maxAbs);
-    } else {
-        descriptors.push_back(0.0);
-    }
-    
-    // 1: MaxEStateIndex
-    if (!estateIndices.empty()) {
-        descriptors.push_back(*std::max_element(estateIndices.begin(), estateIndices.end()));
-    } else {
-        descriptors.push_back(0.0);
-    }
-    
-    // 2: MinAbsEStateIndex
-    if (!estateIndices.empty()) {
-        double minAbs = std::numeric_limits<double>::max();
-        for (double v : estateIndices) {
-            double absV = std::abs(v);
+            if (v > maxV) maxV = v;
             if (absV < minAbs) minAbs = absV;
+            if (v < minV) minV = v;
         }
-        descriptors.push_back(minAbs == std::numeric_limits<double>::max() ? 0.0 : minAbs);
+        descriptors.push_back(maxAbs);  // 0: MaxAbsEStateIndex
+        descriptors.push_back(maxV);    // 1: MaxEStateIndex
+        descriptors.push_back(minAbs);  // 2: MinAbsEStateIndex
+        descriptors.push_back(minV);    // 3: MinEStateIndex
     } else {
-        descriptors.push_back(0.0);
+        descriptors.insert(descriptors.end(), 4, kNaN);
     }
-    
-    // 3: MinEStateIndex
-    if (!estateIndices.empty()) {
-        descriptors.push_back(*std::min_element(estateIndices.begin(), estateIndices.end()));
-    } else {
-        descriptors.push_back(0.0);
-    }
-    
-    // 4: qed - QED descriptor (Quantitative Estimation of Drug-likeness)
-    // Python: qed(mol, w=WEIGHT_MEAN) - uses ADS transformation on properties
-    double qed_value = 0.0;
+
+    // 4: qed -- literal port of QED.qed(mol, w=WEIGHT_MEAN) / QED.properties.
+    double qed_value = kNaN;
     try {
-        // Remove hydrogens like Python does
-        std::unique_ptr<RDKit::RWMol> molNoH_ptr(new RDKit::RWMol(mol));
-        RDKit::RWMol& molNoH = *molNoH_ptr;
+        // mol = Chem.RemoveHs(mol)
+        RDKit::RWMol molNoH(mol);
         RDKit::MolOps::removeHs(molNoH);
-        
-        // Calculate properties (matching Python's properties() function)
-        double MW_qed = calcExactMW(molNoH);
+
+        const double MW_qed = calcAMW(molNoH);  // rdmd._CalcMolWt(mol)
         double logP_qed, MR_qed;
-        calcCrippenDescriptors(molNoH, logP_qed, MR_qed);
-        double ALOGP = logP_qed;
-        
-        // HBA: count acceptors using QED acceptor queries
+        calcCrippenDescriptors(molNoH, logP_qed, MR_qed);  // Crippen.MolLogP
+
+        // HBA = sum(len(mol.GetSubstructMatches(p)) for p in Acceptors if mol.HasSubstructMatch(p))
         unsigned int HBA = 0;
-        auto& acceptorQueries = GetQEDAcceptorQueries();
-        for (const auto& query : acceptorQueries) {
-            if (query) {
-                std::vector<RDKit::MatchVectType> matches;
-                RDKit::SubstructMatch(molNoH, *query, matches);
-                HBA += matches.size();
-            }
+        for (const auto& query : GetQEDAcceptorQueries()) {
+            HBA += RDKit::SubstructMatch(molNoH, *query, SubstructMatchParameters()).size();
         }
-        
-        // HBD: hydrogen bond donors
-        unsigned int HBD = calcNumHBD(molNoH);
-        
-        // PSA: topological polar surface area
-        double PSA = calcTPSA(molNoH);
-        
-        // ROTB: rotatable bonds (strict mode like Python)
-        unsigned int ROTB = calcNumRotatableBonds(molNoH);
-        
-        // AROM: aromatic rings (matching Python: len(Chem.GetSSSR(Chem.DeleteSubstructs(Chem.Mol(mol), AliphaticRings))))
-        unsigned int AROM = 0;
-        try {
-            auto aliphaticRings = RDKit::SmartsToMol("[$([A;R][!a])]");
-            if (aliphaticRings) {
-                RDKit::ROMol* molDeleted = RDKit::deleteSubstructs(molNoH, *aliphaticRings);
-                if (molDeleted) {
-                    std::vector<std::vector<int>> sssr;
-                    RDKit::MolOps::findSSSR(*molDeleted, sssr);
-                    AROM = sssr.size();
-                    delete molDeleted;
-                }
-                delete aliphaticRings;
-            } else {
-                std::vector<std::vector<int>> sssr;
-                RDKit::MolOps::findSSSR(molNoH, sssr);
-                AROM = sssr.size();
-            }
-        } catch (...) {
-            AROM = 0;
-        }
-        
-        // ALERTS: structural alerts count
+        const unsigned int HBD = calcNumHBD(molNoH);
+        const double PSA = calcTPSA(molNoH);
+        const unsigned int ROTB = calcNumRotatableBonds(molNoH, NumRotatableBondsOptions::Strict);
+
+        // AROM = len(Chem.GetSSSR(Chem.DeleteSubstructs(Chem.Mol(mol), AliphaticRings)))
+        static const std::unique_ptr<RWMol> aliphaticRings(RDKit::SmartsToMol("[$([A;R][!a])]"));
+        std::unique_ptr<ROMol> molDeleted(RDKit::deleteSubstructs(molNoH, *aliphaticRings));
+        std::vector<std::vector<int>> sssr;
+        RDKit::MolOps::findSSSR(*molDeleted, sssr);
+        const unsigned int AROM = sssr.size();
+
+        // ALERTS = sum(1 for alert in StructuralAlerts if mol.HasSubstructMatch(alert))
         unsigned int ALERTS = 0;
-        auto& alertQueries = GetQEDAlertQueries();
-        for (const auto& query : alertQueries) {
-            if (query) {
-                std::vector<RDKit::MatchVectType> matches;
-                RDKit::SubstructMatch(molNoH, *query, matches);
-                if (!matches.empty()) {
-                    ALERTS++;
-                }
+        SubstructMatchParameters firstOnly;
+        firstOnly.maxMatches = 1;
+        for (const auto& query : GetQEDAlertQueries()) {
+            if (!RDKit::SubstructMatch(molNoH, *query, firstOnly).empty()) {
+                ++ALERTS;
             }
         }
-        
-        // ADS parameters (from Python QED.py)
+
         struct ADSparam {
             double A, B, C, D, E, F, DMAX;
         };
-        ADSparam adsParams[8] = {
+        static const ADSparam adsParams[8] = {
             {2.817065973, 392.5754953, 290.7489764, 2.419764353, 49.22325677, 65.37051707, 104.9805561},  // MW
             {3.172690585, 137.8624751, 2.534937431, 4.581497897, 0.822739154, 0.576295591, 131.3186604},  // ALOGP
             {2.948620388, 160.4605972, 3.615294657, 4.435986202, 0.290141953, 1.300669958, 148.7763046},  // HBA
@@ -773,42 +716,35 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
             {3.217788970, 957.7374108, 2.274627939, 0.000000001, 1.317690384, 0.375760881, 312.3372610},  // AROM
             {0.010000000, 1199.094025, -0.09002883, 0.000000001, 0.185904477, 0.875193782, 417.7253140},  // ALERTS
         };
-        
-        // WEIGHT_MEAN (from Python)
-        double weights[8] = {0.66, 0.46, 0.05, 0.61, 0.06, 0.65, 0.48, 0.95};
-        double properties[8] = {MW, ALOGP, static_cast<double>(HBA), static_cast<double>(HBD), PSA, static_cast<double>(ROTB), static_cast<double>(AROM), static_cast<double>(ALERTS)};
-        
-        // Apply ADS transformation: ads(x, p) = (p.A + p.B / exp1 * (1 - 1 / exp2)) / p.DMAX
-        // where exp1 = 1 + exp(-(x - p.C + p.D/2) / p.E)
-        //       exp2 = 1 + exp(-(x - p.C - p.D/2) / p.F)
-        double sum_weighted_log = 0.0;
-        double sum_weights = 0.0;
+        static const double weights[8] = {0.66, 0.46, 0.05, 0.61, 0.06, 0.65, 0.48, 0.95};  // WEIGHT_MEAN
+        const double properties[8] = {MW_qed, logP_qed, static_cast<double>(HBA), static_cast<double>(HBD),
+                                      PSA, static_cast<double>(ROTB), static_cast<double>(AROM),
+                                      static_cast<double>(ALERTS)};
+
+        // d = [ads(pi, ...)]; t = sum(wi * math.log(di)); return math.exp(t / sum(w))
+        double t = 0;
+        double sumW = 0;
         for (int i = 0; i < 8; ++i) {
-            double x = properties[i];
+            const double x = properties[i];
             const ADSparam& p = adsParams[i];
-            
-            double exp1 = 1.0 + std::exp(-(x - p.C + p.D / 2.0) / p.E);
-            double exp2 = 1.0 + std::exp(-(x - p.C - p.D / 2.0) / p.F);
-            double dx = (p.A + p.B / exp1 * (1.0 - 1.0 / exp2)) / p.DMAX;
-            
-            if (dx > 0.0) {
-                sum_weighted_log += weights[i] * std::log(dx);
-                sum_weights += weights[i];
-            }
+            const double exp1 = 1 + pyExp(-1 * (x - p.C + p.D / 2) / p.E);
+            const double exp2 = 1 + pyExp(-1 * (x - p.C - p.D / 2) / p.F);
+            const double dx = p.A + p.B / exp1 * (1 - 1 / exp2);
+            const double di = dx / p.DMAX;
+            t = t + weights[i] * pyLog(di);
         }
-        
-        if (sum_weights > 0.0) {
-            qed_value = std::exp(sum_weighted_log / sum_weights);
+        for (int i = 0; i < 8; ++i) {
+            sumW = sumW + weights[i];
         }
+        qed_value = pyExp(t / sumW);
     } catch (...) {
-        qed_value = 0.0;
     }
     descriptors.push_back(qed_value);
     
     // 5: SPS - SPS descriptor (SpacialScore)
     // Pattern from Python SpacialScore.py: molCp = Chem.Mol(mol); rdmolops.FindPotentialStereoBonds(molCp)
     // Python does NOT sanitize - just creates a copy and calls FindPotentialStereoBonds
-    double sps_value = 0.0;
+    double sps_value = kNaN;
     try {
         // Create a deep copy exactly like Python's Chem.Mol(mol)
         std::unique_ptr<RDKit::RWMol> molCopy_ptr(new RDKit::RWMol(mol));
@@ -840,7 +776,7 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
         
         unsigned int nHeavy = molCopy.getNumHeavyAtoms();
         if (nHeavy == 0) {
-            sps_value = 0.0;
+            sps_value = kNaN;  // score /= GetNumHeavyAtoms() -> ZeroDivisionError
         } else {
             double total_score = 0.0;
             
@@ -896,7 +832,7 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
             sps_value = total_score / static_cast<double>(nHeavy);
         }
     } catch (...) {
-        sps_value = 0.0;
+        sps_value = kNaN;
     }
     descriptors.push_back(sps_value);
     
@@ -987,13 +923,13 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
                 std::unique_ptr<FingerprintGenerator<std::uint32_t>> mgen(
                     MorganFingerprint::getMorganGenerator<std::uint32_t>(radius));
                 if (!mgen) {
-                    descriptors.push_back(0.0);
+                    descriptors.push_back(kNaN);
                     continue;
                 }
                 FingerprintFuncArguments args;
                 auto fp = mgen->getSparseCountFingerprint(mol, args);
                 if (!fp) {
-                    descriptors.push_back(0.0);
+                    descriptors.push_back(kNaN);
                     continue;
                 }
                 // Get number of nonzero elements (like Python's len(fp.GetNonzeroElements()))
@@ -1001,8 +937,8 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
                 double density = static_cast<double>(numNonzero) / static_cast<double>(numHeavy);
                 descriptors.push_back(density);
             } catch (...) {
-                // If fingerprint generation fails for this radius, use zero
-                descriptors.push_back(0.0);
+                // Python raises -> NaN
+                descriptors.push_back(kNaN);
             }
         }
     }
@@ -1075,7 +1011,7 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
             }
         }
     } catch (...) {
-        chi0 = 0.0;
+        chi0 = kNaN;
     }
     descriptors.push_back(chi0);
     
@@ -1098,7 +1034,7 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
             }
         }
     } catch (...) {
-        chi1 = 0.0;
+        chi1 = kNaN;
     }
     descriptors.push_back(chi1);
     
@@ -1153,11 +1089,11 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
         int pythonOrder[14] = {0, 9, 10, 11, 12, 13, 1, 2, 3, 4, 5, 6, 7, 8};
         for (int i = 0; i < 14; ++i) {
             int cppIdx = pythonOrder[i];
-            descriptors.push_back(cppIdx < static_cast<int>(peoeVSA.size()) ? peoeVSA[cppIdx] : 0.0);
+            descriptors.push_back(cppIdx < static_cast<int>(peoeVSA.size()) ? peoeVSA[cppIdx] : kNaN);
         }
     } catch (...) {
         for (int i = 0; i < 14; ++i) {
-            descriptors.push_back(0.0);
+            descriptors.push_back(kNaN);
         }
     }
     
@@ -1169,11 +1105,11 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
         int pythonOrder[10] = {0, 9, 1, 2, 3, 4, 5, 6, 7, 8};
         for (int i = 0; i < 10; ++i) {
             int cppIdx = pythonOrder[i];
-            descriptors.push_back(cppIdx < static_cast<int>(smrVSA.size()) ? smrVSA[cppIdx] : 0.0);
+            descriptors.push_back(cppIdx < static_cast<int>(smrVSA.size()) ? smrVSA[cppIdx] : kNaN);
         }
     } catch (...) {
         for (int i = 0; i < 10; ++i) {
-            descriptors.push_back(0.0);
+            descriptors.push_back(kNaN);
         }
     }
     
@@ -1185,11 +1121,11 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
         int pythonOrder[12] = {0, 9, 10, 11, 1, 2, 3, 4, 5, 6, 7, 8};
         for (int i = 0; i < 12; ++i) {
             int cppIdx = pythonOrder[i];
-            descriptors.push_back(cppIdx < static_cast<int>(slogpVSA.size()) ? slogpVSA[cppIdx] : 0.0);
+            descriptors.push_back(cppIdx < static_cast<int>(slogpVSA.size()) ? slogpVSA[cppIdx] : kNaN);
         }
     } catch (...) {
         for (int i = 0; i < 12; ++i) {
-            descriptors.push_back(0.0);
+            descriptors.push_back(kNaN);
         }
     }
     
@@ -1204,11 +1140,11 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
         int pythonOrder[11] = {0, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8};
         for (int i = 0; i < 11; ++i) {
             int cppIdx = pythonOrder[i];
-            descriptors.push_back(cppIdx < static_cast<int>(estateVSA.size()) ? estateVSA[cppIdx] : 0.0);
+            descriptors.push_back(cppIdx < static_cast<int>(estateVSA.size()) ? estateVSA[cppIdx] : kNaN);
         }
     } catch (...) {
         for (int i = 0; i < 11; ++i) {
-            descriptors.push_back(0.0);
+            descriptors.push_back(kNaN);
         }
     }
     
@@ -1220,11 +1156,11 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
         int pythonOrder[10] = {0, 9, 1, 2, 3, 4, 5, 6, 7, 8};
         for (int i = 0; i < 10; ++i) {
             int cppIdx = pythonOrder[i];
-            descriptors.push_back(cppIdx < static_cast<int>(vsaEState.size()) ? vsaEState[cppIdx] : 0.0);
+            descriptors.push_back(cppIdx < static_cast<int>(vsaEState.size()) ? vsaEState[cppIdx] : kNaN);
         }
     } catch (...) {
         for (int i = 0; i < 10; ++i) {
-            descriptors.push_back(0.0);
+            descriptors.push_back(kNaN);
         }
     }
     
@@ -1301,7 +1237,7 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
     
     // Ensure exactly 217 descriptors
     if (descriptors.size() < 217) {
-        descriptors.resize(217, 0.0);
+        descriptors.resize(217, kNaN);
     } else if (descriptors.size() > 217) {
         descriptors.resize(217);
     }
