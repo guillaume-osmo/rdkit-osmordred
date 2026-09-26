@@ -1083,13 +1083,27 @@ const std::vector<MatrixSpec> &osmoMatrixGrid() {
   return g;
 }
 
-std::vector<double> calcMatrix2D(const ROMol &mol) {
+namespace {
+//! The heavy-atom molecule (removeHs) and its topological distance matrix
+//! (MolOps::getDistanceMat defaults; null below two atoms) that Matrix2D, MDE
+//! and AtomPairs2D all start from, built once by calcOsmordred2DExt.
+struct HeavyAtomGraph {
+  explicit HeavyAtomGraph(const ROMol &mol) : work(mol) {
+    MolOps::removeHs(work);
+    if (work.getNumAtoms() >= 2) {
+      dm = MolOps::getDistanceMat(work);
+    }
+  }
+  RWMol work;
+  const double *dm = nullptr;
+};
+
+std::vector<double> calcMatrix2D(const HeavyAtomGraph &hg) {
   const auto &grid = osmoMatrixGrid();
   int total = 5;  // + the five Laplace-only descriptors appended below
   for (const auto &spec : grid) total += static_cast<int>(spec.fns.size());
 
-  RWMol work(mol);
-  MolOps::removeHs(work);
+  const ROMol &work = hg.work;
   const int n = static_cast<int>(work.getNumAtoms());
   std::vector<double> out;
   out.reserve(total);
@@ -1098,7 +1112,7 @@ std::vector<double> calcMatrix2D(const ROMol &mol) {
     return out;
   }
 
-  const double *dm = MolOps::getDistanceMat(work);
+  const double *dm = hg.dm;
   Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n, n), D(n, n), H2(n, n);
   for (int i = 0; i < n; ++i) {
     for (int j = 0; j < n; ++j) {
@@ -1203,13 +1217,12 @@ std::vector<double> calcMatrix2D(const ROMol &mol) {
 // second time held this block to |r| = 0.816; dividing by g reproduces the published
 // values exactly (|r| = 1.0000, max |delta| ~1e-14 over a 4763-molecule reference set).
 // --------------------------------------------------------------------------
-std::vector<double> calcMDE(const ROMol &mol) {
+std::vector<double> calcMDE(const HeavyAtomGraph &hg) {
   static const std::vector<std::pair<int, std::vector<int>>> kClasses{
       {6, {1, 2, 3, 4}}, {8, {1, 2}}, {7, {1, 2, 3}}};
-  RWMol work(mol);
-  MolOps::removeHs(work);
+  const ROMol &work = hg.work;
   const unsigned int n = work.getNumAtoms();
-  const double *dm = n > 1 ? MolOps::getDistanceMat(work) : nullptr;
+  const double *dm = hg.dm;
   std::vector<double> out;
   out.reserve(19);
   for (const auto &cl : kClasses) {
@@ -1245,7 +1258,7 @@ std::vector<double> calcMDE(const ROMol &mol) {
 //
 // Validated exact against alvaDesc: median |r| = 1.0000 across the block.
 // --------------------------------------------------------------------------
-std::vector<double> calcAtomPairs2D(const ROMol &mol) {
+std::vector<double> calcAtomPairs2D(const HeavyAtomGraph &hg) {
   static const char *kBF[12] = {"C", "N", "O", "S", "P", "F",
                                 "Cl", "Br", "I", "B", "Si", "X"};
   static const int kTZ[8] = {7, 8, 16, 15, 9, 17, 35, 53};
@@ -1253,11 +1266,10 @@ std::vector<double> calcAtomPairs2D(const ROMol &mol) {
   const size_t nT = 36, nP = 78;
   std::vector<double> tOut(nT, 0.0), fOut(kDist * nP, 0.0);
 
-  RWMol work(mol);
-  MolOps::removeHs(work);
+  const ROMol &work = hg.work;
   const unsigned int n = work.getNumAtoms();
   if (n >= 2) {
-    const double *dm = MolOps::getDistanceMat(work);
+    const double *dm = hg.dm;
     std::vector<int> cls(n, 11), tcls(n, -1);   // 11 = "X", the catch-all bucket
     for (unsigned int i = 0; i < n; ++i) {
       const std::string sym = work.getAtomWithIdx(i)->getSymbol();
@@ -1290,6 +1302,19 @@ std::vector<double> calcAtomPairs2D(const ROMol &mol) {
   out.insert(out.end(), fOut.begin(), fOut.end());          // F: frequency
   return out;
 }
+}  // namespace
+
+std::vector<double> calcMatrix2D(const ROMol &mol) {
+  return calcMatrix2D(HeavyAtomGraph(mol));
+}
+
+std::vector<double> calcMDE(const ROMol &mol) {
+  return calcMDE(HeavyAtomGraph(mol));
+}
+
+std::vector<double> calcAtomPairs2D(const ROMol &mol) {
+  return calcAtomPairs2D(HeavyAtomGraph(mol));
+}
 
 std::vector<double> calcOsmordred2DExt(const ROMol &mol) {
   std::vector<double> out;
@@ -1302,9 +1327,11 @@ std::vector<double> calcOsmordred2DExt(const ROMol &mol) {
   append(calcEdgeAdjacency(mol));
   append(calcBurdenEigenvalues(mol));
   append(calcCATS2D(mol));
-  append(calcMatrix2D(mol));
-  append(calcMDE(mol));
-  append(calcAtomPairs2D(mol));
+  // Matrix2D, MDE and AtomPairs2D share one heavy-atom graph
+  const HeavyAtomGraph heavy(mol);
+  append(calcMatrix2D(heavy));
+  append(calcMDE(heavy));
+  append(calcAtomPairs2D(heavy));
   out.resize(OSMORDRED_2D_EXT_NUM_DESCRIPTORS, kNaN);
   return out;
 }
