@@ -11,13 +11,14 @@ if(RDK_BUILD_OSMORDRED_SUPPORT)
  endif(NOT RDK_HAS_EIGEN)
 
  message("-- adding OSMORDRED Descriptors")
- set(OSMORDRED_HDRS Osmordred.h)
+ set(OSMORDRED_HDRS Osmordred.h Osmordred2DExt.h)
  set(OSMORDRED_SOURCES
               Osmordred.cpp
               OsmordredHelpers.cpp
               OsmordredBasicPhyschemCountsRules.cpp
               OsmordredTopologicalConnectivityShape.cpp
-              OsmordredMatrixAutocorrEStateFragments.cpp)
+              OsmordredMatrixAutocorrEStateFragments.cpp
+              Osmordred2DExt.cpp)
 
  # Eigen is the default dense linear algebra backend; LAPACKE is optional.
  if(RDK_OSMORDRED_USE_LAPACKE)

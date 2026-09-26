@@ -38,6 +38,7 @@
 
 #ifdef RDK_BUILD_OSMORDRED_SUPPORT
 #include <GraphMol/Descriptors/Osmordred.h>
+#include <GraphMol/Descriptors/Osmordred2DExt.h>
 bool hasOsmordredSupport() { return true; }
 #else
 bool hasOsmordredSupport() { return false; }
@@ -2341,6 +2342,18 @@ BOOST_PYTHON_MODULE(rdMolDescriptors) {
         "BATCH: Compute all Osmordred descriptors for multiple molecules (or smiles) in parallel.\n"
         "Each molecule has a 60-second timeout - returns NaN if exceeded.\n"
         "Returns vector of descriptor vectors (one per molecule).\n");
+
+    // ---- Osmordred v4: extra 2D (topological) block ------------------------
+    python::def("CalcOsmordred2DExt",
+        RDKit::Descriptors::Osmordred2DExt::calcOsmordred2DExt,
+        (python::arg("mol")),
+        "Osmordred v4 topological extension (Dragon/alvaDesc families that v3 does not\n"
+        "implement: nCIR, Narumi, augmented edge adjacency, Burden, CATS2D, the 19\n"
+        "matrix-based families, MDE and 2D atom pairs). No conformer required.\n"
+        "GetOsmordred2DExtDescriptorNames() gives the names and count.\n");
+    python::def("GetOsmordred2DExtDescriptorNames",
+        RDKit::Descriptors::Osmordred2DExt::getOsmordred2DExtDescriptorNames,
+        "Names, in the order CalcOsmordred2DExt returns values.\n");
 
     python::def("GetOsmordredDescriptorNames", RDKit::Descriptors::Osmordred::getOsmordredDescriptorNames,
         "Get descriptor names in the same order as CalcOsmordred returns values.\n"
