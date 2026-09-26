@@ -499,7 +499,7 @@ std::vector<std::vector<double>> computeBaryszMatrix0L(
   }
 
   // Apply Floyd-Warshall
-  baryszMatrix = floydWarshallL(baryszMatrix);
+  floydWarshallL(baryszMatrix);
 
   // Update diagonal
   for (unsigned int i = 0; i < numAtoms; ++i) {

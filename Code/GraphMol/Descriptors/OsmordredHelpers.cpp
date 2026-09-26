@@ -1201,22 +1201,21 @@ Eigen::MatrixXd floydWarshall(Eigen::MatrixXd &A) {
   return A;
 }
 
-std::vector<std::vector<double>> floydWarshallL(
-    std::vector<std::vector<double>> &matrix) {
-  int n = matrix.size();
+void floydWarshallL(std::vector<std::vector<double>> &matrix) {
+  const size_t n = matrix.size();
+  constexpr double inf = std::numeric_limits<double>::infinity();
 
-  for (int k = 0; k < n; ++k) {
-    for (int i = 0; i < n; ++i) {
-      for (int j = 0; j < n; ++j) {
-        if (matrix[i][k] < std::numeric_limits<double>::infinity() &&
-            matrix[k][j] < std::numeric_limits<double>::infinity()) {
-          matrix[i][j] = std::min(matrix[i][j], matrix[i][k] + matrix[k][j]);
+  for (size_t k = 0; k < n; ++k) {
+    const std::vector<double> &rowK = matrix[k];
+    for (size_t i = 0; i < n; ++i) {
+      std::vector<double> &rowI = matrix[i];
+      for (size_t j = 0; j < n; ++j) {
+        if (rowI[k] < inf && rowK[j] < inf) {
+          rowI[j] = std::min(rowI[j], rowI[k] + rowK[j]);
         }
       }
     }
   }
-
-  return matrix;
 }
 
 }  // namespace Osmordred

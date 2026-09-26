@@ -240,8 +240,8 @@ double VR3L(double vr1, int numAtoms);
 
 // Floyd Warshall shortest paths algorithms
 Eigen::MatrixXd floydWarshall(Eigen::MatrixXd &A);
-std::vector<std::vector<double>> floydWarshallL(
-    std::vector<std::vector<double>> &matrix);
+//! in-place Floyd-Warshall on a dense row-major distance matrix
+void floydWarshallL(std::vector<std::vector<double>> &matrix);
 
 template<class MOL>
 const RingInfo & getRings(const MOL &mol) {
