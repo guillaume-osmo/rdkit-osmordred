@@ -856,7 +856,26 @@ std::vector<std::vector<double>> osmoDetourMatrix(const ROMol &mol) {
 //! shortest path (minimise hop count, then bond-term sum) with a BFS-layered DP: relax
 //! u->v only when v is one BFS layer beyond u, visiting nodes in hop order so every
 //! predecessor is final before use.
-Eigen::MatrixXd osmoBaryszMatrix(const ROMol &mol, char key, const double *dm) {
+//! For every source atom s, all atoms stably sorted by hop distance from s (the
+//! visiting order of osmoBaryszMatrix's BFS-layered DP). It depends only on the
+//! distance matrix, so it is computed once for all six weightings.
+std::vector<std::vector<int>> osmoHopOrders(int n, const double *dm) {
+  std::vector<std::vector<int>> orders(n, std::vector<int>(n));
+  for (int s = 0; s < n; ++s) {
+    const double *hops = dm + static_cast<size_t>(s) * n;
+    std::vector<int> &order = orders[s];
+    for (int i = 0; i < n; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [hops](int a, int b) {
+      const double ha = std::isfinite(hops[a]) ? hops[a] : 1e18;
+      const double hb = std::isfinite(hops[b]) ? hops[b] : 1e18;
+      return ha < hb;
+    });
+  }
+  return orders;
+}
+
+Eigen::MatrixXd osmoBaryszMatrix(const ROMol &mol, char key, const double *dm,
+                                 const std::vector<std::vector<int>> &hopOrders) {
   const int n = static_cast<int>(mol.getNumAtoms());
   const auto w = osmoMatrixWeight(mol, key);
   const double wc = osmoCarbonReference(key);
@@ -870,15 +889,9 @@ Eigen::MatrixXd osmoBaryszMatrix(const ROMol &mol, char key, const double *dm) {
   }
   Eigen::MatrixXd M = Eigen::MatrixXd::Zero(n, n);
   const double kInf = std::numeric_limits<double>::infinity();
-  std::vector<int> order(n);
   for (int s = 0; s < n; ++s) {
     const double *hops = dm + static_cast<size_t>(s) * n;
-    for (int i = 0; i < n; ++i) order[i] = i;
-    std::stable_sort(order.begin(), order.end(), [hops](int a, int b) {
-      const double ha = std::isfinite(hops[a]) ? hops[a] : 1e18;
-      const double hb = std::isfinite(hops[b]) ? hops[b] : 1e18;
-      return ha < hb;
-    });
+    const std::vector<int> &order = hopOrders[s];
     std::vector<double> best(n, kInf);
     best[s] = 0.0;
     for (int u : order) {
@@ -1171,8 +1184,10 @@ std::vector<double> calcMatrix2D(const HeavyAtomGraph &hg) {
     built.emplace("D/Dt", DDt);
   }
   static const char kBarysz[6] = {'Z', 'e', 'i', 'm', 'p', 'v'};
+  const auto hopOrders = osmoHopOrders(n, dm);
   for (char key : kBarysz) {
-    built.emplace(std::string("Dz(") + key + ")", osmoBaryszMatrix(work, key, dm));
+    built.emplace(std::string("Dz(") + key + ")",
+                  osmoBaryszMatrix(work, key, dm, hopOrders));
   }
   static const char kBurden[6] = {'e', 'i', 'm', 'p', 's', 'v'};
   for (char key : kBurden) {
