@@ -927,9 +927,11 @@ Eigen::MatrixXd osmoBurdenMatrix2D(const ROMol &mol, char key) {
 //! The 34 matrix functionals, in the order of kMatFnNames. n is nSK, nBO the bond count
 //! (H excluded), nCIC the circuit count, VS_i the i-th row sum, a_ij the adjacency,
 //! lambda the eigenvalues and l the last eigenvector.
-std::array<double, kMatFnCount> osmoMatrixFunctionals(const Eigen::MatrixXd &M,
-                                                      const Eigen::MatrixXd &A,
-                                                      int nBO, int nCIC, bool isLaplace) {
+//! When \c eigenvaluesOut is given and the decomposition succeeds, it receives
+//! the (ascending) eigenvalues of the symmetrised matrix.
+std::array<double, kMatFnCount> osmoMatrixFunctionals(
+    const Eigen::MatrixXd &M, const Eigen::MatrixXd &A, int nBO, int nCIC,
+    bool isLaplace, Eigen::VectorXd *eigenvaluesOut = nullptr) {
   std::array<double, kMatFnCount> f;
   f.fill(0.0);
   const int n = static_cast<int>(M.rows());
@@ -939,6 +941,9 @@ std::array<double, kMatFnCount> osmoMatrixFunctionals(const Eigen::MatrixXd &M,
   Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(sym);
   if (es.info() != Eigen::Success) return f;
   const Eigen::VectorXd ev = es.eigenvalues();          // ascending
+  if (eigenvaluesOut) {
+    *eigenvaluesOut = ev;
+  }
   const Eigen::MatrixXd evec = es.eigenvectors();
 
   double diagSum = 0.0, offSum = 0.0, offRecip = 0.0, hyper = 0.0;
@@ -1174,14 +1179,16 @@ std::vector<double> calcMatrix2D(const HeavyAtomGraph &hg) {
     built.emplace(std::string("B(") + key + ")", osmoBurdenMatrix2D(work, key));
   }
 
+  Eigen::VectorXd laplaceEigenvalues;  // filled by the "L" grid entry
   for (const auto &spec : grid) {
     auto it = built.find(spec.name);
     if (it == built.end()) {                      // detour guard tripped
       out.insert(out.end(), spec.fns.size(), std::numeric_limits<double>::quiet_NaN());
       continue;
     }
-    const auto f = osmoMatrixFunctionals(it->second, A, nBO, nCIC,
-                                         std::string(spec.name) == "L");
+    const bool isLaplace = std::string(spec.name) == "L";
+    const auto f = osmoMatrixFunctionals(it->second, A, nBO, nCIC, isLaplace,
+                                         isLaplace ? &laplaceEigenvalues : nullptr);
     for (int idx : spec.fns) out.push_back(f[idx]);
   }
 
@@ -1192,8 +1199,13 @@ std::vector<double> calcMatrix2D(const HeavyAtomGraph &hg) {
   //   TI1_L  first Mohar index, 2*log10(nBO/nSK) * QW_L
   //   TI2_L  second Mohar index, 4/(nSK*Acon)
   //   STN_L  spanning-tree number, ln(prod(nonzero lambda) / nSK)
-  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> les(L);
-  const Eigen::VectorXd lev = les.eigenvalues();   // ascending; lev(0) is the zero
+  // L is exactly symmetric, so 0.5 * (L + L^T) == L bit for bit and the grid's
+  // decomposition of the "L" entry already produced these eigenvalues.
+  if (laplaceEigenvalues.size() != n) {
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> les(L);
+    laplaceEigenvalues = les.eigenvalues();
+  }
+  const Eigen::VectorXd &lev = laplaceEigenvalues;  // ascending; lev(0) is the zero
   const double acon = lev(1);
   double qw = 0.0, logProd = 0.0;
   for (int i = 1; i < n; ++i) {
