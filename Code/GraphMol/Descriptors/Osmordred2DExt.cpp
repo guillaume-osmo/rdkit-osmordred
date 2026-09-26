@@ -705,6 +705,33 @@ double osmoCarbonReference(char key) {
   return w.empty() ? 1.0 : w[0];
 }
 
+// All-pairs longest simple path WITHIN one biconnected component (a single ring system,
+// hence small): naive backtracking DFS from every node, confined to the BCC so the
+// exponential cost stays bounded. adj, visited and the rows of lsp are indexed by global
+// atom index; lsp(s, g) receives the longest s-g path for every pair of block nodes.
+void allPairsLongestPathBCC(const std::vector<int> &nodes,
+                            const std::vector<std::vector<int>> &adj,
+                            std::vector<char> &visited,
+                            std::vector<std::vector<double>> &lsp) {
+  std::vector<double> result(adj.size(), 0.0);
+  std::function<void(int, double)> dfs = [&](int u, double dist) {
+    visited[u] = 1;
+    if (dist > result[u]) result[u] = dist;
+    for (int v : adj[u]) {
+      if (!visited[v]) dfs(v, dist + 1.0);
+    }
+    visited[u] = 0;
+  };
+  for (int s : nodes) {
+    for (int n : nodes) result[n] = 0.0;
+    dfs(s, 0.0);
+    for (int g : nodes) {
+      lsp[s][g] = std::max(lsp[s][g], result[g]);
+      lsp[g][s] = lsp[s][g];
+    }
+  }
+}
+
 //! Detour matrix (all-pairs LONGEST simple path) via biconnected decomposition, ported
 //! from osmordred v3's computeDetourMatrixBCC (rdkit-brian 99e253646, "fix DetourMatrix
 //! hang on polycyclic molecules"), which follows Mordred's CalcDetour. Longest simple
@@ -714,129 +741,107 @@ double osmoCarbonReference(char key) {
 //! through the single shared cut atom. Returns an empty matrix when one block is
 //! genuinely intractable (circuit rank > 12 — a fullerene-like cage); callers emit NaN.
 //! 🔴 The rank test is PER BLOCK: many separate rings stay cheap.
+//! The per-block longest paths and the merge use dense N x N tables indexed by atom;
+//! all entries are sums of unit bond lengths, hence exact.
 std::vector<std::vector<double>> osmoDetourMatrix(const ROMol &mol) {
+  using namespace boost;
   const int N = static_cast<int>(mol.getNumAtoms());
   if (N == 0) return {};
   if (N == 1) return {{0.0}};
 
-  typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS,
-                                boost::no_property,
-                                boost::property<boost::edge_index_t, std::size_t>>
+  typedef adjacency_list<vecS, vecS, undirectedS, no_property,
+                         property<edge_index_t, std::size_t>>
       BGraph;
   BGraph g(N);
   std::size_t eidx = 0;
-  for (const auto b : mol.bonds()) {
-    boost::add_edge(b->getBeginAtomIdx(), b->getEndAtomIdx(), eidx++, g);
+  for (const auto &bond : mol.bonds()) {
+    add_edge(bond->getBeginAtomIdx(), bond->getEndAtomIdx(), eidx++, g);
   }
-  if (boost::num_edges(g) == 0) {
-    return std::vector<std::vector<double>>(N, std::vector<double>(N, 0.0));
-  }
+  if (num_edges(g) == 0) return std::vector<std::vector<double>>(N, std::vector<double>(N, 0.0));
 
-  std::vector<std::size_t> comp(boost::num_edges(g));
-  auto compMap = boost::make_iterator_property_map(comp.begin(), boost::get(boost::edge_index, g));
-  const std::size_t nBcc = boost::biconnected_components(g, compMap);
+  std::vector<std::size_t> comp(num_edges(g));
+  auto compMap = make_iterator_property_map(comp.begin(), get(edge_index, g));
+  std::size_t nBcc = biconnected_components(g, compMap);
 
   std::vector<std::vector<std::pair<int, int>>> bccEdges(nBcc);
-  boost::graph_traits<BGraph>::edge_iterator ei, ei_end;
-  for (boost::tie(ei, ei_end) = boost::edges(g); ei != ei_end; ++ei) {
-    bccEdges[compMap[*ei]].emplace_back(static_cast<int>(boost::source(*ei, g)),
-                                        static_cast<int>(boost::target(*ei, g)));
+  graph_traits<BGraph>::edge_iterator ei, ei_end;
+  for (boost::tie(ei, ei_end) = edges(g); ei != ei_end; ++ei) {
+    bccEdges[compMap[*ei]].emplace_back(static_cast<int>(source(*ei, g)),
+                                        static_cast<int>(target(*ei, g)));
   }
 
-  struct Block {
-    std::set<int> nodes;
-    std::map<std::pair<int, int>, double> lsp;
-  };
-  std::vector<Block> Q;
+  // Longest paths inside each block. Every pair of nodes of a block gets an entry in
+  // blockLsp (row-major, global indices); pairs in two different blocks are never
+  // read from it.
+  std::vector<std::vector<int>> blockNodes;
+  std::vector<std::vector<double>> blockLsp(N, std::vector<double>(N, 0.0));
+  std::vector<std::vector<int>> adj(N);
+  std::vector<char> visited(N, 0);
+  std::vector<char> inBlock(N, 0);
   for (const auto &edgesInBcc : bccEdges) {
     if (edgesInBcc.empty()) continue;
-    std::set<int> bnodes;
-    std::unordered_map<int, std::vector<int>> adj;
-    for (const auto &ab : edgesInBcc) {
-      bnodes.insert(ab.first);
-      bnodes.insert(ab.second);
-      adj[ab.first].push_back(ab.second);
-      adj[ab.second].push_back(ab.first);
-    }
-    if (static_cast<int>(edgesInBcc.size()) - static_cast<int>(bnodes.size()) + 1 > 12) {
-      return {};
-    }
-    Block blk;
-    blk.nodes = bnodes;
-    // exhaustive backtracking DFS, confined to this block
-    std::set<int> visited;
-    std::function<void(int, double, std::unordered_map<int, double> &)> dfs =
-        [&](int u, double dist, std::unordered_map<int, double> &result) {
-          visited.insert(u);
-          if (dist > result[u]) result[u] = dist;
-          auto it = adj.find(u);
-          if (it != adj.end()) {
-            for (int v : it->second) {
-              if (!visited.count(v)) dfs(v, dist + 1.0, result);
-            }
-          }
-          visited.erase(u);
-        };
-    for (int s : bnodes) {
-      std::unordered_map<int, double> result;
-      for (int x : bnodes) result[x] = 0.0;
-      visited.clear();
-      dfs(s, 0.0, result);
-      for (int gI : bnodes) {
-        const auto key = std::make_pair(std::min(s, gI), std::max(s, gI));
-        auto f = blk.lsp.find(key);
-        if (f == blk.lsp.end() || result[gI] > f->second) blk.lsp[key] = result[gI];
+    std::vector<int> bnodes;
+    for (const auto &[a, b] : edgesInBcc) {
+      for (int n : {a, b}) {
+        if (!inBlock[n]) {
+          inBlock[n] = 1;
+          bnodes.push_back(n);
+        }
       }
+      adj[a].push_back(b);
+      adj[b].push_back(a);
     }
-    Q.push_back(std::move(blk));
+    std::sort(bnodes.begin(), bnodes.end());
+    const int rank =
+        static_cast<int>(edgesInBcc.size()) - static_cast<int>(bnodes.size()) + 1;
+    if (rank > 12) return {};  // intractable single ring system -> caller emits NaN
+    allPairsLongestPathBCC(bnodes, adj, visited, blockLsp);
+    for (int n : bnodes) {
+      adj[n].clear();
+      inBlock[n] = 0;
+    }
+    blockNodes.push_back(std::move(bnodes));
   }
-  if (Q.empty()) return std::vector<std::vector<double>>(N, std::vector<double>(N, 0.0));
+  if (blockNodes.empty()) return std::vector<std::vector<double>>(N, std::vector<double>(N, 0.0));
 
-  std::set<int> nodes = Q.back().nodes;
-  std::map<std::pair<int, int>, double> C = Q.back().lsp;
-  Q.pop_back();
-  while (!Q.empty()) {
+  // Merge blocks along the block-cut tree (Mordred CalcDetour.merge / calc_weight): a new
+  // block shares exactly one (cut) atom with the atoms merged so far; paths between an old
+  // atom i and a new atom j go through that atom.
+  std::vector<std::vector<double>> D(N, std::vector<double>(N, 0.0));
+  std::vector<char> merged(N, 0);
+  std::vector<int> nodes = blockNodes.back();
+  for (int i : nodes) {
+    merged[i] = 1;
+    for (int j : nodes) D[i][j] = blockLsp[i][j];
+  }
+  blockNodes.pop_back();
+  while (!blockNodes.empty()) {
     int found = -1, common = -1;
-    for (int i = static_cast<int>(Q.size()) - 1; i >= 0; --i) {
+    for (int i = static_cast<int>(blockNodes.size()) - 1; i >= 0; --i) {
       int inter = -1, nInter = 0;
-      for (int nd : Q[i].nodes) {
-        if (nodes.count(nd)) { inter = nd; if (++nInter > 1) break; }
-      }
+      for (int n : blockNodes[i])
+        if (merged[n]) { inter = n; if (++nInter > 1) break; }
       if (nInter == 0) continue;
-      if (nInter > 1) return {};
+      if (nInter > 1) return {};  // block-cut property violated (shouldn't happen)
       found = i; common = inter; break;
     }
-    if (found < 0) return {};
-    Block blk = std::move(Q[found]);
-    Q.erase(Q.begin() + found);
-    std::set<int> newNodes = nodes;
-    for (int nd : blk.nodes) newNodes.insert(nd);
-    std::map<std::pair<int, int>, double> newC;
-    for (int i : newNodes) {
-      for (int j : newNodes) {
-        if (i > j) continue;
-        const auto ij = std::make_pair(i, j);
-        auto cIt = C.find(ij);
-        if (cIt != C.end()) { newC[ij] = cIt->second; continue; }
-        auto lIt = blk.lsp.find(ij);
-        if (lIt != blk.lsp.end()) { newC[ij] = lIt->second; continue; }
-        const auto ic = std::make_pair(std::min(i, common), std::max(i, common));
-        const auto jc = std::make_pair(std::min(j, common), std::max(j, common));
-        auto cic = C.find(ic); auto ljc = blk.lsp.find(jc);
-        if (cic != C.end() && ljc != blk.lsp.end()) { newC[ij] = cic->second + ljc->second; continue; }
-        auto cjc = C.find(jc); auto lic = blk.lsp.find(ic);
-        if (cjc != C.end() && lic != blk.lsp.end()) { newC[ij] = cjc->second + lic->second; continue; }
-        return {};
+    if (found < 0) return {};  // disconnected (shouldn't happen for a valid molecule)
+    std::vector<int> block = std::move(blockNodes[found]);
+    blockNodes.erase(blockNodes.begin() + found);
+    for (int j : block) {
+      if (j == common) continue;
+      for (int i : block) D[i][j] = D[j][i] = blockLsp[i][j];
+      for (int i : nodes) {
+        if (i == common) continue;
+        D[i][j] = D[j][i] = D[i][common] + blockLsp[j][common];
       }
     }
-    C = std::move(newC);
-    nodes = std::move(newNodes);
-  }
-
-  std::vector<std::vector<double>> D(N, std::vector<double>(N, 0.0));
-  for (const auto &kv : C) {
-    D[kv.first.first][kv.first.second] = kv.second;
-    D[kv.first.second][kv.first.first] = kv.second;
+    for (int j : block) {
+      if (!merged[j]) {
+        merged[j] = 1;
+        nodes.push_back(j);
+      }
+    }
   }
   return D;
 }
