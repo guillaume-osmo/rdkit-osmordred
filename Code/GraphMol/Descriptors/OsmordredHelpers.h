@@ -10,6 +10,7 @@
 #include <GraphMol/Substruct/SubstructMatch.h>
 
 #include <memory>
+#include <optional>
 
 namespace RDKit {
 namespace Descriptors {
@@ -40,6 +41,10 @@ class OsmordredContext {
   //! query index); filled by the EState code on first use
   std::unique_ptr<std::vector<std::vector<MatchVectType>>> estateExtMatches;
 
+  //! Descriptors::calcNumHBA / calcNumHBD of mol, filled on first use
+  std::optional<unsigned int> numHBA;
+  std::optional<unsigned int> numHBD;
+
  private:
   const ROMol &d_mol;
   std::unique_ptr<ROMol> d_molWithHs;
@@ -60,6 +65,7 @@ std::vector<double> calcRNCG_RPCG(OsmordredContext &ctx);
 std::vector<double> calcAutoCorrelation(OsmordredContext &ctx);
 double calcFramework(OsmordredContext &ctx);
 std::vector<double> calcEStateDescs(OsmordredContext &ctx, bool extended);
+std::vector<double> calcHydrogenBond(OsmordredContext &ctx);
 std::vector<double> calcBEStateDescs(OsmordredContext &ctx);
 template <class T>
 double InfoEntropy(const std::vector<T> &data) {

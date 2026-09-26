@@ -1221,17 +1221,37 @@ std::vector<double> calcSLogP(const ROMol &mol) {
   return res;
 }
 
+// H-bond acceptor / donor counts (used by two blocks): computed once
+unsigned int getNumHBA(OsmordredContext &ctx) {
+  if (!ctx.numHBA) {
+    ctx.numHBA = Descriptors::calcNumHBA(ctx.mol());
+  }
+  return *ctx.numHBA;
+}
+
+unsigned int getNumHBD(OsmordredContext &ctx) {
+  if (!ctx.numHBD) {
+    ctx.numHBD = Descriptors::calcNumHBD(ctx.mol());
+  }
+  return *ctx.numHBD;
+}
+
 // Hydrogen from Rdkit code
-std::vector<double> calcHydrogenBond(const ROMol &mol) {
+std::vector<double> calcHydrogenBond(OsmordredContext &ctx) {
   std::vector<double> res(2, 0.);
 
-  int nHBAcc = Descriptors::calcNumHBA(mol);
+  int nHBAcc = getNumHBA(ctx);
 
-  int nHBDon = Descriptors::calcNumHBD(mol);
+  int nHBDon = getNumHBD(ctx);
   res[0] = static_cast<double>(nHBAcc);
   res[1] = static_cast<double>(nHBDon);
 
   return res;
+}
+
+std::vector<double> calcHydrogenBond(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcHydrogenBond(ctx);
 }
 
 // MOE need to implement EState here ;-)
@@ -1480,8 +1500,8 @@ int calculateGhoseFilter(double MW, double LogP, double MR, int numAtoms) {
 std::vector<int> calcLipinskiGhose(OsmordredContext &ctx) {
   const ROMol &mol = ctx.mol();
   double MW = Descriptors::calcExactMW(mol);
-  double HBDon = static_cast<double>(Descriptors::calcNumHBD(mol));
-  double HBAcc = static_cast<double>(Descriptors::calcNumHBA(mol));
+  double HBDon = static_cast<double>(getNumHBD(ctx));
+  double HBAcc = static_cast<double>(getNumHBA(ctx));
   double LogP;
   double MR;
   Descriptors::calcCrippenDescriptors(mol, LogP, MR);

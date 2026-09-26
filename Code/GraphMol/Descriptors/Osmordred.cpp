@@ -153,7 +153,7 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
       mol));  // addNames("ExtendedTopochemicalAtom", 45);
   append1(calcFragmentComplexity(mol));     // addNames("FragmentComplexity", 1);
   append1(calcFramework(ctx));              // addNames("Framework", 1);
-  append(calcHydrogenBond(mol));           // addNames("HydrogenBond", 2);
+  append(calcHydrogenBond(ctx));           // addNames("HydrogenBond", 2);
   append1(calcLogS(mol));                   // addNames("LogS", 1);
   append(calcInformationContent(mol, opts.icOptions));  // addNames("InformationContent",
                                            // 42);
