@@ -728,79 +728,41 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
     descriptors.push_back(static_cast<double>(totalRadicals));
     
     // 11-14: Partial charge descriptors
-    // Python: MaxPartialCharge, MinPartialCharge, MaxAbsPartialCharge, MinAbsPartialCharge
-    // Python's _ChargeDescriptors returns (minCharge, maxCharge), then:
-    //   MaxAbsPartialCharge = max(abs(minCharge), abs(maxCharge))
-    //   MinAbsPartialCharge = min(abs(minCharge), abs(maxCharge))
-    //
-    // CRITICAL: When mol comes from Python (e.g. ToBinary after create_rdkit_descriptors),
-    // Python has already set _GasteigerCharge on every atom. Reusing those values (instead
-    // of calling computeGasteigerCharges again) gives identical min/max and avoids ~3e-12
-    // float differences from C++ vs Python Gasteiger iteration order.
+    // Literal port of Descriptors.py:_ChargeDescriptors:
+    //   ComputeGasteigerCharges(mol)            (nIter=12, throwOnParamFailure=False)
+    //   minChg, maxChg = 500., -500.
+    //   for at in mol.GetAtoms():
+    //     chg = float(at.GetProp('_GasteigerCharge'))
+    //     minChg = min(chg, minChg); maxChg = max(chg, maxChg)
+    // Charges are always recomputed (Python never reuses existing props). The
+    // GetProp string round trip is exact (17 significant digits), so the double
+    // is read directly. Python's builtin min(a, b) returns b if b < a else a
+    // (likewise max with >); with a NaN charge the comparison is false, so the
+    // running value is reset to the NaN atom and recovers at the next atom.
+    // This comparison order is reproduced exactly, including NaN propagation.
     double maxCharge = std::numeric_limits<double>::quiet_NaN();
     double minCharge = std::numeric_limits<double>::quiet_NaN();
     double maxAbsCharge = std::numeric_limits<double>::quiet_NaN();
     double minAbsCharge = std::numeric_limits<double>::quiet_NaN();
     try {
-        // Check if every atom already has _GasteigerCharge (e.g. mol from Python with charges set)
-        unsigned int nAtoms = mol.getNumAtoms();
-        bool allHaveCharge = (nAtoms > 0);
-        for (unsigned int i = 0; i < nAtoms && allHaveCharge; ++i) {
-            const Atom* atom = mol.getAtomWithIdx(i);
-            double d;
-            std::string s;
-            if (!atom->getPropIfPresent("_GasteigerCharge", d) && !atom->getPropIfPresent("_GasteigerCharge", s))
-                allHaveCharge = false;
-        }
-        if (!allHaveCharge)
-            RDKit::computeGasteigerCharges(mol, 12, false);
-
+        RDKit::computeGasteigerCharges(mol, 12, false);
         double minChg = 500.0;
         double maxChg = -500.0;
-        for (unsigned int i = 0; i < nAtoms; ++i) {
-            const Atom* atom = mol.getAtomWithIdx(i);
-            double chg;
-            bool haveChg = false;
-            if (atom->getPropIfPresent("_GasteigerCharge", chg)) {
-                haveChg = true;
-            } else {
-                std::string s;
-                if (atom->getPropIfPresent("_GasteigerCharge", s)) {
-                    chg = std::stod(s);
-                    haveChg = true;
-                }
-            }
-            if (haveChg && !std::isnan(chg)) {
-                minChg = std::min(chg, minChg);
-                maxChg = std::max(chg, maxChg);
-            }
+        for (const auto atom : mol.atoms()) {
+            const double chg = atom->getProp<double>(common_properties::_GasteigerCharge);
+            minChg = (minChg < chg) ? minChg : chg;  // min(chg, minChg)
+            maxChg = (maxChg > chg) ? maxChg : chg;  // max(chg, maxChg)
         }
-        // Fallback: same as Gasteiger splitChargeConjugated — when no valid Gasteiger charge (e.g. metals),
-        // use formal charge so [Hg+2], [Fe+2], etc. get min=max=formal (matches Python).
-        if (minChg >= maxChg && nAtoms > 0) {
-            minChg = 500.0;
-            maxChg = -500.0;
-            for (unsigned int i = 0; i < nAtoms; ++i) {
-                double fc = static_cast<double>(mol.getAtomWithIdx(i)->getFormalCharge());
-                if (fc < minChg) minChg = fc;
-                if (fc > maxChg) maxChg = fc;
-            }
-        }
-        // Only NaN when no atom had a valid charge (sentinels unchanged: minChg > maxChg). When minChg == maxChg (e.g. one atom, II) we have a valid result.
-        if (minChg > maxChg) {
-            minCharge = maxCharge = maxAbsCharge = minAbsCharge = std::numeric_limits<double>::quiet_NaN();
-        } else {
-            minCharge = minChg;
-            maxCharge = maxChg;
-            double absMin = std::abs(minCharge);
-            double absMax = std::abs(maxCharge);
-            maxAbsCharge = std::max(absMin, absMax);
-            minAbsCharge = std::min(absMin, absMax);
-        }
+        minCharge = minChg;
+        maxCharge = maxChg;
+        const double a1 = std::fabs(minChg);
+        const double a2 = std::fabs(maxChg);
+        maxAbsCharge = (a2 > a1) ? a2 : a1;  // max(abs(v1), abs(v2))
+        minAbsCharge = (a2 < a1) ? a2 : a1;  // min(abs(v1), abs(v2))
     } catch (...) {
-        // If something fails, keep NaNs (so Python/C++ can agree on missingness).
+        // Python raises -> CalcMolDescriptors missing value (NaN)
     }
-    
+
     descriptors.push_back(maxCharge);      // MaxPartialCharge
     descriptors.push_back(minCharge);      // MinPartialCharge
     descriptors.push_back(maxAbsCharge);   // MaxAbsPartialCharge
