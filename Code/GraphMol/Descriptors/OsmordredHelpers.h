@@ -154,6 +154,12 @@ std::vector<std::tuple<std::vector<int>, std::set<int>, ChiType>>
 extractAndClassifyPaths(const RDKit::ROMol &mol, unsigned int targetLength,
                         bool useHs);
 
+//! Conservative substructure screen: returns false only if some atom of
+//! queryMol is compatible (Query::Match, the test the matcher applies) with
+//! no atom of mol, in which case SubstructMatch(mol, queryMol) finds nothing.
+//! Recursive SMARTS are screened through their own query molecules.
+bool queryMolMayMatch(const ROMol &mol, const ROMol &queryMol);
+
 void solveLinearSystem(const ROMol &mol, std::vector<double> &A,
                        std::vector<double> &B, int n, int nrhs, bool &success);
 

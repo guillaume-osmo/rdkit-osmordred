@@ -38,7 +38,6 @@
 #include <RDGeneral/Invariant.h>
 #include <GraphMol/SanitException.h>
 #include <GraphMol/RDKitBase.h>
-#include <GraphMol/QueryOps.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/SmilesParse/SmilesWrite.h>
@@ -930,7 +929,9 @@ std::vector<double> calcEStateDescs(const ROMol &mol, bool extended) {
   for (const auto &[name, pattern] : queries) {
     // Find all substructure matches
     std::vector<MatchVectType> matches;
-    SubstructMatch(mol, *pattern, matches, true);
+    if (queryMolMayMatch(mol, *pattern)) {
+      SubstructMatch(mol, *pattern, matches, true);
+    }
 
     // Update counts, sums, max, and min
     counts[i] = static_cast<int>(matches.size());
@@ -1004,7 +1005,9 @@ std::vector<double> calcHBDHBAtDescs(const ROMol &mol,
         continue;  // Skip if not found or null pointer
 
       std::vector<MatchVectType> matches;
-      SubstructMatch(mol, *GetesQueries()[idx].second, matches, true);
+      if (queryMolMayMatch(mol, *GetesQueries()[idx].second)) {
+        SubstructMatch(mol, *GetesQueries()[idx].second, matches, true);
+      }
 
       for (const auto &match : matches) {
         int atomIdx = match[0].second;
@@ -1126,7 +1129,9 @@ std::vector<double> calcHEStateDescs(const ROMol &mol) {
     // and the over-count of one anchor with several matching neighbours
     // (e.g. HCHnX, HCsatu). HEState is an osmordred extension (not in Mordred).
     std::vector<MatchVectType> matches;
-    SubstructMatch(mol, *pattern, matches, false);
+    if (queryMolMayMatch(mol, *pattern)) {
+      SubstructMatch(mol, *pattern, matches, false);
+    }
     std::unordered_set<int> anchors;
     for (const auto &match : matches) anchors.insert(match[0].second);
 
@@ -2391,8 +2396,9 @@ std::vector<int> NamePosES(
   size_t nAtoms = mol.getNumAtoms();
   std::vector<int> pos(nAtoms, 0);  // Initialize positions with 0
   for (unsigned int idx = 0; idx < queries.size(); idx++) {
-    auto entry = queries[idx];
+    const auto &entry = queries[idx];
     if (!entry.second) continue;  // Skip invalid SMARTS patterns
+    if (!queryMolMayMatch(mol, *entry.second)) continue;
 
     std::vector<MatchVectType> qmatches;
     if (SubstructMatch(mol, *entry.second, qmatches, true)) {
@@ -2728,91 +2734,6 @@ static const std::vector<std::string> BSELFragments = {
     "[OX2]-c:c-[OX2]"};
 
 // Precompile SMARTS patterns for efficiency
-namespace {
-using AtomQuery = Queries::Query<int, Atom const *, true>;
-
-bool hasRecursiveQuery(const AtomQuery *query) {
-  if (query->getDescription() == "RecursiveStructure") {
-    return true;
-  }
-  for (auto child = query->beginChildren(); child != query->endChildren();
-       ++child) {
-    if (hasRecursiveQuery(child->get())) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool queryMolMayMatch(const ROMol &mol, const ROMol &queryMol);
-
-// Conservative screen: false only if no atom of mol can satisfy the query.
-// Parts without recursive SMARTS are tested with Query::Match, exactly the
-// test the substructure matcher applies; a recursive SMARTS can only be
-// satisfied if its own query molecule passes the screen.
-bool atomQueryMayMatch(const ROMol &mol, const AtomQuery *query) {
-  if (!hasRecursiveQuery(query)) {
-    for (const auto atom : mol.atoms()) {
-      if (query->Match(atom)) {
-        return true;
-      }
-    }
-    return false;
-  }
-  if (query->getNegation()) {
-    return true;
-  }
-  const auto &description = query->getDescription();
-  if (description == "RecursiveStructure") {
-    const auto *queryMol =
-        static_cast<const RecursiveStructureQuery *>(query)->getQueryMol();
-    return !queryMol || queryMolMayMatch(mol, *queryMol);
-  }
-  if (description == "AtomOr") {
-    for (auto child = query->beginChildren(); child != query->endChildren();
-         ++child) {
-      if (atomQueryMayMatch(mol, child->get())) {
-        return true;
-      }
-    }
-    return false;
-  }
-  if (description == "AtomAnd") {
-    for (auto child = query->beginChildren(); child != query->endChildren();
-         ++child) {
-      if (!atomQueryMayMatch(mol, child->get())) {
-        return false;
-      }
-    }
-    return true;
-  }
-  return true;
-}
-
-// false only if some atom of queryMol can match no atom of mol, in which case
-// SubstructMatch(mol, queryMol) finds nothing.
-bool queryMolMayMatch(const ROMol &mol, const ROMol &queryMol) {
-  for (const auto queryAtom : queryMol.atoms()) {
-    if (queryAtom->hasQuery()) {
-      if (!atomQueryMayMatch(mol, queryAtom->getQuery())) {
-        return false;
-      }
-    } else {
-      bool found = false;
-      for (const auto atom : mol.atoms()) {
-        if (queryAtom->Match(atom)) {
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-}  // namespace
 
 static const std::vector<std::shared_ptr<RWMol>> &GetQueriesA() {
   static const std::vector<std::shared_ptr<RWMol>> queriesA = [] {
@@ -3125,12 +3046,17 @@ std::map<int, std::vector<std::vector<int>>> mordredCN(const ROMol &mol,
 //! RDKit writes these charge-separated, which makes two chemically equivalent
 //! oxygens inequivalent in the graph; see InformationContentOptions.
 std::set<std::pair<int, int>> delocalizedBonds(const ROMol &mol) {
-  static const std::vector<std::string> patterns = {
-      "[N+](=O)[O-]", "[CX3](=O)[O-]", "[SX4](=O)(=O)[O-]"};
+  static const std::vector<std::unique_ptr<ROMol>> queries = [] {
+    std::vector<std::unique_ptr<ROMol>> res;
+    for (const auto &smarts :
+         {"[N+](=O)[O-]", "[CX3](=O)[O-]", "[SX4](=O)(=O)[O-]"}) {
+      res.emplace_back(SmartsToMol(smarts));
+    }
+    return res;
+  }();
   std::set<std::pair<int, int>> out;
-  for (const auto &smarts : patterns) {
-    std::unique_ptr<ROMol> query(SmartsToMol(smarts));
-    if (!query) continue;
+  for (const auto &query : queries) {
+    if (!query || !queryMolMayMatch(mol, *query)) continue;
     std::vector<MatchVectType> matches;
     SubstructMatch(mol, *query, matches, true);
     for (const auto &match : matches) {

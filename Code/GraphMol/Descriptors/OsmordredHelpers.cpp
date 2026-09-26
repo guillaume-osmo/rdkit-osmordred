@@ -29,6 +29,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 #include "OsmordredHelpers.h"
+#include <GraphMol/QueryOps.h>
 #include <GraphMol/SmilesParse/SmilesWrite.h>
 #include <stack>
 
@@ -665,6 +666,90 @@ extractAndClassifyPaths(const RDKit::ROMol &mol, unsigned int targetLength,
     results.emplace_back(path, std::set<int>(atoms.begin(), atoms.end()), type);
   }
   return results;
+}
+
+namespace {
+using AtomQuery = Queries::Query<int, Atom const *, true>;
+
+bool hasRecursiveQuery(const AtomQuery *query) {
+  if (query->getDescription() == "RecursiveStructure") {
+    return true;
+  }
+  for (auto child = query->beginChildren(); child != query->endChildren();
+       ++child) {
+    if (hasRecursiveQuery(child->get())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Conservative screen: false only if no atom of mol can satisfy the query.
+// Parts without recursive SMARTS are tested with Query::Match, exactly the
+// test the substructure matcher applies; a recursive SMARTS can only be
+// satisfied if its own query molecule passes the screen.
+bool atomQueryMayMatch(const ROMol &mol, const AtomQuery *query) {
+  if (!hasRecursiveQuery(query)) {
+    for (const auto atom : mol.atoms()) {
+      if (query->Match(atom)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (query->getNegation()) {
+    return true;
+  }
+  const auto &description = query->getDescription();
+  if (description == "RecursiveStructure") {
+    const auto *queryMol =
+        static_cast<const RecursiveStructureQuery *>(query)->getQueryMol();
+    return !queryMol || queryMolMayMatch(mol, *queryMol);
+  }
+  if (description == "AtomOr") {
+    for (auto child = query->beginChildren(); child != query->endChildren();
+         ++child) {
+      if (atomQueryMayMatch(mol, child->get())) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (description == "AtomAnd") {
+    for (auto child = query->beginChildren(); child != query->endChildren();
+         ++child) {
+      if (!atomQueryMayMatch(mol, child->get())) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return true;
+}
+}  // namespace
+
+// false only if some atom of queryMol can match no atom of mol, in which case
+// SubstructMatch(mol, queryMol) finds nothing.
+bool queryMolMayMatch(const ROMol &mol, const ROMol &queryMol) {
+  for (const auto queryAtom : queryMol.atoms()) {
+    if (queryAtom->hasQuery()) {
+      if (!atomQueryMayMatch(mol, queryAtom->getQuery())) {
+        return false;
+      }
+    } else {
+      bool found = false;
+      for (const auto atom : mol.atoms()) {
+        if (queryAtom->Match(atom)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 #ifndef RDK_OSMORDRED_USE_LAPACKE
