@@ -2183,25 +2183,31 @@ std::vector<double> calcAutoCorrelation(OsmordredContext &ctx) {
     GATS[0][t] = ATSC[0][t] / (numAtoms - 1);
   }
 
-  // Lags 1 to maxLag: pairwise correlations
-  for (int k = 1; k <= maxDistance; ++k) {
-    int maxkVertexPairs = 0;
-    for (unsigned int i = 0; i < numAtoms; ++i) {
-      for (unsigned int j = i + 1; j < numAtoms; ++j) {
-        if (distanceMatrix[i][j] == k) {
-          ++maxkVertexPairs;
-          for (unsigned int t = 0; t < numProperties; ++t) {
-            double diff = propertyMatrix[t][i] - propertyMatrix[t][j];
-            if (t > 0) {
-              ATS_[k][t - 1] += propertyMatrix[t][i] * propertyMatrix[t][j];
-            }
-            ATSC[k][t] += centeredProperties[t][i] * centeredProperties[t][j];
-            GATS[k][t] += diff * diff;
-          }
+  // Lags 1 to maxLag: pairwise correlations. One pass over the atom pairs
+  // accumulates every lag; each lag still sees its pairs in the same (i, j)
+  // order, so every sum is formed in the same order as a pass per lag.
+  std::vector<int> kVertexPairs(maxDistance + 1, 0);
+  for (unsigned int i = 0; i < numAtoms; ++i) {
+    for (unsigned int j = i + 1; j < numAtoms; ++j) {
+      const double dij = distanceMatrix[i][j];
+      if (!(dij >= 1 && dij <= maxDistance) || dij != static_cast<int>(dij)) {
+        continue;
+      }
+      const int k = static_cast<int>(dij);
+      ++kVertexPairs[k];
+      for (unsigned int t = 0; t < numProperties; ++t) {
+        double diff = propertyMatrix[t][i] - propertyMatrix[t][j];
+        if (t > 0) {
+          ATS_[k][t - 1] += propertyMatrix[t][i] * propertyMatrix[t][j];
         }
+        ATSC[k][t] += centeredProperties[t][i] * centeredProperties[t][j];
+        GATS[k][t] += diff * diff;
       }
     }
+  }
 
+  for (int k = 1; k <= maxDistance; ++k) {
+    const int maxkVertexPairs = kVertexPairs[k];
     if (maxkVertexPairs > 0) {
       for (unsigned int t = 0; t < numProperties; ++t) {
         if (t > 0) {
