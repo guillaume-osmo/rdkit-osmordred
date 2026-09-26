@@ -30,6 +30,7 @@
 //
 #include "OsmordredHelpers.h"
 #include <GraphMol/QueryOps.h>
+#include <GraphMol/Substruct/SubstructMatch.h>
 #include <GraphMol/SmilesParse/SmilesWrite.h>
 #include <stack>
 
@@ -750,6 +751,30 @@ bool queryMolMayMatch(const ROMol &mol, const ROMol &queryMol) {
     }
   }
   return true;
+}
+
+unsigned int countUniqueMatches(const ROMol &mol, const ROMol &queryMol) {
+  if (!queryMolMayMatch(mol, queryMol)) {
+    return 0;
+  }
+  if (queryMol.getNumAtoms() == 1 && queryMol.getNumBonds() == 0) {
+    const Atom *queryAtom = queryMol.getAtomWithIdx(0);
+    if (!queryAtom->hasQuery() || !hasRecursiveQuery(queryAtom->getQuery())) {
+      // every compatible atom is one unique match; the matcher applies the
+      // same Atom::Match test and stops at its default maxMatches
+      const SubstructMatchParameters defaults;
+      unsigned int count = 0;
+      for (const auto atom : mol.atoms()) {
+        if (queryAtom->Match(atom) && ++count == defaults.maxMatches) {
+          break;
+        }
+      }
+      return count;
+    }
+  }
+  std::vector<MatchVectType> matches;
+  SubstructMatch(mol, queryMol, matches, true);  // uniquify = true
+  return matches.size();
 }
 
 #ifndef RDK_OSMORDRED_USE_LAPACKE

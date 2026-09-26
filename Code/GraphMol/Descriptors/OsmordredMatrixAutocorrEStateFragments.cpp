@@ -2837,27 +2837,18 @@ std::vector<double> calcAbrahams(const ROMol &mol) {
 
   try {
     // Calculate A descriptor
-    // queries that provably cannot match are not run through the matcher;
-    // their count of zero still enters every sum as before
+    // counts of zero still enter every sum as before
     const auto &queriesA = GetQueriesA();
     for (size_t i = 0; i < queriesA.size(); ++i) {
-      std::vector<MatchVectType> matches;
-      if (queryMolMayMatch(mol, *queriesA[i])) {
-        SubstructMatch(mol, *queriesA[i], matches, true);  // uniquify = true
-      }
-      retval[0] += matches.size() * coefAFragments[i];
+      const size_t nMatches = countUniqueMatches(mol, *queriesA[i]);
+      retval[0] += nMatches * coefAFragments[i];
     }
 
     // Calculate BSEL descriptors
     int sulphurCount = 0;
     const auto &queriesB = GetQueriesB();
     for (size_t i = 0; i < queriesB.size(); ++i) {
-      std::vector<MatchVectType> matches;
-      if (queryMolMayMatch(mol, *queriesB[i])) {
-        SubstructMatch(mol, *queriesB[i], matches, true);  // uniquify = true
-      }
-
-      int uniqueMatches = matches.size();
+      int uniqueMatches = countUniqueMatches(mol, *queriesB[i]);
       if (30 <= i && i <= 34) {
         sulphurCount += uniqueMatches;
       } else if (i == 35) {
@@ -5031,14 +5022,7 @@ std::vector<double> calcFrags(const ROMol &mol) {
   try {
     // Calculate A descriptor
     for (size_t i = 0; i < queriesFrags.size(); ++i) {
-      // skipping a query that cannot match leaves its count at zero; most
-      // fragment counts are zero
-      if (!queryMolMayMatch(mol, *queriesFrags[i])) {
-        continue;
-      }
-      std::vector<MatchVectType> matches;
-      SubstructMatch(mol, *queriesFrags[i], matches, true);  // uniquify = true
-      retval[i] = matches.size();
+      retval[i] = countUniqueMatches(mol, *queriesFrags[i]);
     }
 
   } catch (const std::exception &e) {

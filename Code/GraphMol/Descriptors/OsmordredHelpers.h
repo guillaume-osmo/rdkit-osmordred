@@ -168,6 +168,12 @@ extractAndClassifyPaths(const RDKit::ROMol &mol, unsigned int targetLength,
 //! Recursive SMARTS are screened through their own query molecules.
 bool queryMolMayMatch(const ROMol &mol, const ROMol &queryMol);
 
+//! Number of matches SubstructMatch(mol, queryMol, matches, true) returns
+//! (unique matches, default parameters), skipping the matcher when
+//! queryMolMayMatch() rules a match out and counting single-atom queries
+//! without recursive SMARTS directly.
+unsigned int countUniqueMatches(const ROMol &mol, const ROMol &queryMol);
+
 void solveLinearSystem(const ROMol &mol, std::vector<double> &A,
                        std::vector<double> &B, int n, int nrhs, bool &success);
 
