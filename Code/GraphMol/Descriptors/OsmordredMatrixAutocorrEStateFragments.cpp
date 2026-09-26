@@ -1021,7 +1021,7 @@ std::vector<double> calcHBDHBAtDescs(const ROMol &mol,
 
   // Function to find index of a SMARTS pattern in `esQueries`
   auto findIndex = [&](const std::string &smarts) -> int {
-    auto esQueries = GetesQueries();
+    const auto &esQueries = GetesQueries();
     for (size_t i = 0; i < esQueries.size(); ++i) {
       if (esQueries[i].first == smarts) return i;  // Found index
     }
@@ -1139,7 +1139,7 @@ std::vector<double> calcHBDHBAtDescs(const ROMol &mol,
 // Function to calculate HEState fingerprints + need to add the HBD, wHDBm HBA
 // and wHBA patterns
 std::vector<double> calcHEStateDescs(const ROMol &mol) {
-  auto hsQueries = GetHsQueries();
+  const auto &hsQueries = GetHsQueries();
   size_t nPatts = hsQueries.size();
   std::vector<int> counts(nPatts, 0);
   std::vector<double> sums(nPatts, 0.0);
