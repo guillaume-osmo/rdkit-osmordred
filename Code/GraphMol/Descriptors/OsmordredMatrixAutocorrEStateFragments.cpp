@@ -1452,11 +1452,13 @@ std::vector<double> calcAllChiDescriptors(const ROMol &mol) {
   std::vector<double> chain_xd(8, 0.0), chain_xdv(8, 0.0);
   std::vector<double> cluster_xd(8, 0.0), cluster_xdv(8, 0.0);
   std::vector<double> pathcluster_xd(8, 0.0), pathcluster_xdv(8, 0.0);
+  const auto bondAtoms = getBondAtoms(mol);
   std::vector<int> degreeScratch(mol.getNumAtoms(), 0);
   std::vector<int> nodes;
   auto accumulate = [&](const std::vector<int> &bonds) {
     const unsigned int order = bonds.size();
-    const ChiType type = classifyBondSubgraph(mol, bonds, degreeScratch, nodes);
+    const ChiType type =
+        classifyBondSubgraph(bondAtoms, bonds, degreeScratch, nodes);
     double *xd = nullptr, *xdv = nullptr;
     if (type == ChiType::Chain && order >= 3 && order <= 7) {
       xd = &chain_xd[order];

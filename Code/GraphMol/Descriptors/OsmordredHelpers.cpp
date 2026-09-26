@@ -595,21 +595,27 @@ ChiType classifySubgraph(const RDKit::ROMol &mol,
   }
 }
 
-ChiType classifyBondSubgraph(const RDKit::ROMol &mol,
+std::vector<std::pair<int, int>> getBondAtoms(const RDKit::ROMol &mol) {
+  std::vector<std::pair<int, int>> bondAtoms(mol.getNumBonds());
+  for (const auto bond : mol.bonds()) {
+    bondAtoms[bond->getIdx()] = {static_cast<int>(bond->getBeginAtomIdx()),
+                                 static_cast<int>(bond->getEndAtomIdx())};
+  }
+  return bondAtoms;
+}
+
+ChiType classifyBondSubgraph(const std::vector<std::pair<int, int>> &bondAtoms,
                              const std::vector<int> &bondPath,
                              std::vector<int> &degreeScratch,
                              std::vector<int> &atoms) {
-  PRECONDITION(degreeScratch.size() >= mol.getNumAtoms(),
-               "degreeScratch too small");
   atoms.clear();
   for (int bondIdx : bondPath) {
-    const auto *bond = mol.getBondWithIdx(bondIdx);
-    for (int atomIdx :
-         {static_cast<int>(bond->getBeginAtomIdx()),
-          static_cast<int>(bond->getEndAtomIdx())}) {
-      if (degreeScratch[atomIdx]++ == 0) {
-        atoms.push_back(atomIdx);
-      }
+    const auto &[begin, end] = bondAtoms[bondIdx];
+    if (degreeScratch[begin]++ == 0) {
+      atoms.push_back(begin);
+    }
+    if (degreeScratch[end]++ == 0) {
+      atoms.push_back(end);
     }
   }
   bool hasDegreeTwo = false;
@@ -650,10 +656,12 @@ extractAndClassifyPaths(const RDKit::ROMol &mol, unsigned int targetLength,
             // expensive...
 
   results.reserve(paths.size());
+  const auto bondAtoms = getBondAtoms(mol);
   std::vector<int> degreeScratch(mol.getNumAtoms(), 0);
   std::vector<int> atoms;
   for (const auto &path : paths) {
-    const ChiType type = classifyBondSubgraph(mol, path, degreeScratch, atoms);
+    const ChiType type =
+        classifyBondSubgraph(bondAtoms, path, degreeScratch, atoms);
     results.emplace_back(path, std::set<int>(atoms.begin(), atoms.end()), type);
   }
   return results;
