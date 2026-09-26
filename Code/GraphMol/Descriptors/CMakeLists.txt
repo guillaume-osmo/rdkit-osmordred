@@ -12,13 +12,20 @@ if(RDK_BUILD_OSMORDRED_SUPPORT)
 
  message("-- adding OSMORDRED Descriptors")
  set(OSMORDRED_HDRS Osmordred.h Osmordred2DExt.h)
+ # RDKit's 217 Python descriptors (Descriptors._descList) ported to C++, a separate function
+ set(RDKIT217_HDRS rdkit217/RDKit217Descriptors.h)
+ # dmpnn-cpp-fp16 input featurizer (graph + 228-value molecule block); needs MMFF typing
+ set(DMPNN_HDRS dmpnn/DmpnnFeaturizer.h)
+ set(DMPNN_LINK_LIBRARIES ForceFieldHelpers)
  set(OSMORDRED_SOURCES
               Osmordred.cpp
               OsmordredHelpers.cpp
               OsmordredBasicPhyschemCountsRules.cpp
               OsmordredTopologicalConnectivityShape.cpp
               OsmordredMatrixAutocorrEStateFragments.cpp
-              Osmordred2DExt.cpp)
+              Osmordred2DExt.cpp
+              rdkit217/RDKit217Descriptors.cpp
+              dmpnn/DmpnnFeaturizer.cpp)
 
  # Eigen is the default dense linear algebra backend; LAPACKE is optional.
  if(RDK_OSMORDRED_USE_LAPACKE)
@@ -41,7 +48,7 @@ rdkit_library(Descriptors
               DCLV.cpp
 	      ${OSMORDRED_SOURCES}
               ${DESC3D_SOURCES}
-              LINK_LIBRARIES DataStructs Fingerprints PartialCharges SmilesParse FileParsers Subgraphs SubstructMatch MolTransforms GraphMol
+              LINK_LIBRARIES DataStructs Fingerprints PartialCharges SmilesParse FileParsers Subgraphs SubstructMatch MolTransforms GraphMol ${DMPNN_LINK_LIBRARIES}
                  EigenSolvers RDGeneral)
 target_compile_definitions(Descriptors PRIVATE RDKIT_DESCRIPTORS_BUILD)
 if(RDK_OSMORDRED_USE_LAPACKE)
@@ -59,6 +66,8 @@ rdkit_headers(Crippen.h BCUT.h Lipinski.h
               OxidationNumbers.h
               DCLV.h
 	      ${OSMORDRED_HDRS}
+	      ${RDKIT217_HDRS}
+	      ${DMPNN_HDRS}
               ${DESC3D_HDRS}
               DEST GraphMol/Descriptors)
 
