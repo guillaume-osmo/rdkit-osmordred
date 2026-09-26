@@ -2071,7 +2071,6 @@ std::vector<double> calcAutoCorrelation(OsmordredContext &ctx) {
   bool gasteiger_ok = checkGasteigerParameters(mol);
 
   const ROMol *hmol = &ctx.molWithHs();
-  double *dist = MolOps::getDistanceMat(*hmol, false);  // Topological matrix
   const unsigned int numAtoms = hmol->getNumAtoms();
   const unsigned int numProperties = 12;
   // Lookup tables
@@ -2125,9 +2124,44 @@ std::vector<double> calcAutoCorrelation(OsmordredContext &ctx) {
   // Initialize the topological symetric distance matrix without diagonal
   std::vector<std::vector<double>> distanceMatrix(
       numAtoms, std::vector<double>(numAtoms, 0.0));
-  for (unsigned int i = 0; i < numAtoms; ++i) {
-    for (unsigned int j = i + 1; j < numAtoms; ++j) {
-      distanceMatrix[i][j] = dist[i * numAtoms + j];
+  // hmol keeps the atoms of mol (same indices) and appends hydrogens that are
+  // each bonded to one atom of mol, so d(H, x) = 1 + d(parent(H), x): derive
+  // the (exact, integer) distances from the cached distance matrix of mol
+  // instead of running Floyd-Warshall on the larger H molecule. Only
+  // distances 1..8 are used below.
+  const unsigned int nMolAtoms = mol.getNumAtoms();
+  std::vector<unsigned int> parent(numAtoms);
+  std::vector<double> hops(numAtoms, 0.0);
+  bool pendantHs = numAtoms >= nMolAtoms;
+  for (unsigned int i = 0; i < numAtoms && pendantHs; ++i) {
+    parent[i] = i;
+    if (i >= nMolAtoms) {
+      const Atom *atom = hmol->getAtomWithIdx(i);
+      pendantHs = atom->getDegree() == 1;
+      if (pendantHs) {
+        parent[i] = (*hmol->atomNeighbors(atom).begin())->getIdx();
+        hops[i] = 1.0;
+        pendantHs = parent[i] < nMolAtoms;
+      }
+    }
+  }
+  if (pendantHs) {
+    const double *dist = MolOps::getDistanceMat(mol, false, false, false);
+    for (unsigned int i = 0; i < numAtoms; ++i) {
+      for (unsigned int j = i + 1; j < numAtoms; ++j) {
+        distanceMatrix[i][j] =
+            (parent[i] == parent[j]
+                 ? 0.0
+                 : dist[parent[i] * nMolAtoms + parent[j]]) +
+            hops[i] + hops[j];
+      }
+    }
+  } else {
+    const double *dist = MolOps::getDistanceMat(*hmol, false);
+    for (unsigned int i = 0; i < numAtoms; ++i) {
+      for (unsigned int j = i + 1; j < numAtoms; ++j) {
+        distanceMatrix[i][j] = dist[i * numAtoms + j];
+      }
     }
   }
 
