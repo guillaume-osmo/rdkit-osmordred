@@ -478,7 +478,8 @@ std::vector<double> calcEdgeAdjacency(const ROMol &mol) {
     // k=2 and 1/23759 by k=8 — the two forms converge to ~96% agreement at SM08, which
     // is why a high-order spot check passes and the low orders stay wrong. Reading the
     // residual back through exp() gives exactly 1 at every order.
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(A);
+    // only eigenvalues are used; skipping the eigenvectors leaves them unchanged
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(A, Eigen::EigenvaluesOnly);
     const Eigen::VectorXd ev =
         (es.info() == Eigen::Success) ? es.eigenvalues() : Eigen::VectorXd::Zero(A.rows());
     for (int k = 1; k <= 15; ++k) {
