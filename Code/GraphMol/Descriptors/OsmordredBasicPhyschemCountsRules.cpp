@@ -66,6 +66,7 @@
 #include <iomanip>  // For std::fixed and std::setprecision
 #include <sstream>  // For std::ostringstream
 #include <iostream>
+#include <cstdint>
 #include <cstring>  // For memcpy
 #include <functional>
 #include <numeric>
@@ -499,34 +500,25 @@ double calcBalabanJ(const ROMol &mol) {
 // part, but I have to change to input for matching python code)
 template <typename... Args>
 std::string makeKey(Args... args) {
-  std::ostringstream oss;
-  ((oss << args << "_"), ...);
-  std::string key = oss.str();
+  // same text as streaming the integers separated by '_', without the cost
+  // of an ostringstream per key
+  std::string key;
+  ((key += std::to_string(args), key += '_'), ...);
   key.pop_back();  // Remove the trailing underscore
   return key;
 }
-
 // Function to assign symmetry classes to each atom based on the distance matrix
-std::vector<int> assignSymmetryClasses(const ROMol &mol,
-                                       const std::vector<std::vector<double>> &,
-                                       int numAtoms, int cutoff) {
+std::vector<int> assignSymmetryClasses(
+    const std::vector<std::vector<double>> &distMatrix, int numAtoms,
+    int cutoff) {
   std::vector<int> symList(numAtoms, 0);
-
-  double *distances = MolOps::getDistanceMat(mol, true, false, true, "Balaban");
-  std::vector<std::vector<double>> distMatrix(
-      numAtoms, std::vector<double>(numAtoms, 0.0));
-
-  // Fill the distance matrix
-  for (int i = 0; i < numAtoms; ++i) {
-    for (int j = i; j < numAtoms; ++j) {
-      distMatrix[i][j] = distances[i * numAtoms + j];
-      distMatrix[j][i] = distMatrix[i][j];
-    }
-  }
 
   // To store unique symmetry classes
   std::unordered_map<std::string, int> keysSeen;
   int currentClass = 1;
+  // std::to_string(double) goes through printf; a molecule has few distinct
+  // distances, so format each distinct value (by bit pattern) once
+  std::unordered_map<std::uint64_t, std::string> formatted;
 
   // Assign symmetry classes based on distances
   for (int i = 0; i < numAtoms; ++i) {
@@ -537,7 +529,14 @@ std::vector<int> assignSymmetryClasses(const ROMol &mol,
     std::string key = "";
     for (int j = 0; j < std::min(cutoff, static_cast<int>(tmpList.size()));
          ++j) {
-      key += std::to_string(tmpList[j]) + ",";
+      std::uint64_t bits;
+      std::memcpy(&bits, &tmpList[j], sizeof(bits));
+      auto it = formatted.find(bits);
+      if (it == formatted.end()) {
+        it = formatted.emplace(bits, std::to_string(tmpList[j])).first;
+      }
+      key += it->second;
+      key += ",";
     }
 
     if (keysSeen.find(key) == keysSeen.end()) {
@@ -666,7 +665,7 @@ double calcBertzCT(const ROMol &mol) {
   // Create bondDict, neighborList, and vdList
   auto [bondDict, neighborList, vdList] = CreateBondDictEtc(mol, numAtoms);
   // Assign symmetry classes
-  auto symmetryClasses = assignSymmetryClasses(mol, dMat, numAtoms, cutoff);
+  auto symmetryClasses = assignSymmetryClasses(dMat, numAtoms, cutoff);
 
   // Iterate over atoms to compute atomTypeDict and connectionDict
   for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
