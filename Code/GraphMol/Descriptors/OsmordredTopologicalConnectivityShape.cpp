@@ -252,33 +252,81 @@ int calcPathsOfLengthN_(const ROMol &mol, int order) {
   return j;
 }
 
-// second code  V2 faster than extractAndClassifyPaths
-int calcPathsOfLengthN(const ROMol &mol, int order) {
-  // Extract and classify subgraphs for the current radius order
-  int j = 0;
-
-  auto paths = findAllPathsOfLengthN(
-      mol, order + 1, false, false, -1,
-      false);  // Atoms indices we need +1 at it is linear path order bonds
-               // equal order+1 atoms paths!!!!
-
-  for (const auto &atomPath : paths) {
-    std::unordered_set<int> visitedAtoms;  // Set to track visited atoms
-    bool isDuplicate = false;
-
-    for (size_t i = 0; i < atomPath.size(); ++i) {
-      if (visitedAtoms.count(atomPath[i])) {
-        isDuplicate = true;
-        break;
-      }
-      visitedAtoms.insert(atomPath[i]);
+namespace {
+// Depth-first extension of the simple path ending at \c atomIdx; see
+// countSimplePaths.
+void extendSimplePaths(
+    const std::vector<std::vector<std::pair<int, double>>> &nbrs, int start,
+    int atomIdx, unsigned int nBonds, double bondProduct,
+    unsigned int maxBonds, std::vector<char> &inPath,
+    std::vector<int> &counts, std::vector<double> *bondProducts) {
+  for (const auto &[nbr, bondOrder] : nbrs[atomIdx]) {
+    if (inPath[nbr]) {
+      continue;
     }
-
-    if (!isDuplicate) {
-      j++;  // Increment true path count and exclude Chain
+    const double product = bondProduct * bondOrder;
+    // each undirected path is seen from both ends; keep one direction
+    if (nbr > start) {
+      ++counts[nBonds + 1];
+      if (bondProducts) {
+        (*bondProducts)[nBonds + 1] += product;
+      }
+    }
+    if (nBonds + 1 < maxBonds) {
+      inPath[nbr] = 1;
+      extendSimplePaths(nbrs, start, nbr, nBonds + 1, product, maxBonds,
+                        inPath, counts, bondProducts);
+      inPath[nbr] = 0;
     }
   }
-  return j;
+}
+
+// Counts the simple paths (no repeated atom) of 1..maxBonds bonds between
+// non-hydrogen atoms, i.e. the atom paths returned by
+// findAllPathsOfLengthN(mol, k + 1, false, false, -1, false) once the ring
+// closures (paths revisiting an atom) are dropped, without materialising
+// them. counts[k] is the number of paths with k bonds; bondProducts[k], if
+// requested, is the sum over those paths of the product of their bond orders.
+void countSimplePaths(const ROMol &mol, unsigned int maxBonds,
+                      std::vector<int> &counts,
+                      std::vector<double> *bondProducts) {
+  const unsigned int nAtoms = mol.getNumAtoms();
+  counts.assign(maxBonds + 1, 0);
+  if (bondProducts) {
+    bondProducts->assign(maxBonds + 1, 0.0);
+  }
+  std::vector<std::vector<std::pair<int, double>>> nbrs(nAtoms);
+  for (const auto bond : mol.bonds()) {
+    const auto *beg = bond->getBeginAtom();
+    const auto *end = bond->getEndAtom();
+    if (beg->getAtomicNum() == 1 || end->getAtomicNum() == 1) {
+      continue;
+    }
+    const double bondOrder = bond->getBondTypeAsDouble();
+    nbrs[beg->getIdx()].emplace_back(end->getIdx(), bondOrder);
+    nbrs[end->getIdx()].emplace_back(beg->getIdx(), bondOrder);
+  }
+  if (maxBonds == 0) {
+    return;
+  }
+  std::vector<char> inPath(nAtoms, 0);
+  for (unsigned int start = 0; start < nAtoms; ++start) {
+    inPath[start] = 1;
+    extendSimplePaths(nbrs, start, start, 0, 1.0, maxBonds, inPath, counts,
+                      bondProducts);
+    inPath[start] = 0;
+  }
+}
+}  // namespace
+
+int calcPathsOfLengthN(const ROMol &mol, int order) {
+  // number of true (atom-unique) linear paths with `order` bonds
+  if (order <= 0) {
+    return 0;
+  }
+  std::vector<int> counts;
+  countSimplePaths(mol, order, counts, nullptr);
+  return counts[order];
 }
 
 // thrid code no need for Iterator ... so very slightly faster then V2
@@ -331,46 +379,6 @@ struct pathHash {
   }
 };
 
-// Calculate path counts and weighted product
-std::pair<int, double> calculatePathCount(const ROMol &mol, int order) {
-  int L = 0;           // Path count
-  double piSum = 0.0;  // Weighted bond product sum
-
-  // Get all paths of the given length
-  auto paths = findAllPathsOfLengthN(
-      mol, order + 1, false, false, -1,
-      false);  // Atoms indices we need +1 at it is linear path order bonds
-               // equal order+1 atoms paths!!!!
-
-  for (const auto &atomPath : paths) {
-    std::unordered_set<int> visitedAtoms;  // Set to track visited atoms
-    bool isDuplicate = false;
-
-    double bondProduct = 1.0;  // Initialize bond product
-
-    for (size_t i = 0; i < atomPath.size(); ++i) {
-      if (visitedAtoms.count(atomPath[i])) {
-        isDuplicate = true;
-        break;
-      }
-      visitedAtoms.insert(atomPath[i]);
-
-      if (i > 0) {
-        const auto *bond =
-            mol.getBondBetweenAtoms(atomPath[i - 1], atomPath[i]);
-        bondProduct *= bond->getBondTypeAsDouble();
-      }
-    }
-
-    if (!isDuplicate) {
-      L++;                   // Increment path count
-      piSum += bondProduct;  // Add bond product to the sum
-    }
-  }
-
-  return {L, piSum};
-}
-
 // Main function to calculate path descriptors
 std::vector<double> calcPathCount(const ROMol &mol) {
   std::vector<double> results(21, 0.0);  // Output vector
@@ -378,8 +386,13 @@ std::vector<double> calcPathCount(const ROMol &mol) {
   double cumulativePiSum =
       static_cast<double>(mol.getNumAtoms());  // Initialize piPC1
 
+  std::vector<int> pathCounts;
+  std::vector<double> bondProducts;
+  countSimplePaths(mol, 10, pathCounts, &bondProducts);
+
   for (int order = 1; order <= 10; ++order) {
-    auto [L, piSum] = calculatePathCount(mol, order);
+    const int L = pathCounts[order];
+    const double piSum = bondProducts[order];
 
     if (order > 1) {
       results[order - 2] = L;  // MPC2-MPC10 in indices 0-8
