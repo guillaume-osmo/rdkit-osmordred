@@ -43,6 +43,18 @@
 #include <utility>
 #include <memory>  // For std::shared_ptr
 #include <future>  // For std::async
+#include <array>
+#include <cstdio>
+#include <stdexcept>
+#include <ML/InfoTheory/InfoGainFuncs.h>  // RDInfoTheory::InfoEntropy (rdInfoTheory)
+
+// Python parity: this file's own arithmetic ports Python/numpy expressions,
+// which are evaluated one IEEE operation at a time. Disable FMA contraction
+// (clang's default -ffp-contract=on) for everything below; code in the headers
+// above, like the C++ that Python calls, keeps the default.
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
 
 namespace RDKit {
 namespace Descriptors {
@@ -53,148 +65,325 @@ namespace Osmordred {
 std::vector<double> calcEState_VSA(const ROMol &mol);
 std::vector<double> calcVSA_EState(const ROMol &mol);
 
-// Helper to safely compute descriptor, return 0.0 on error
-template<typename Func>
-double safeCompute(Func func, const ROMol& mol) {
-    try {
-        return func(mol);
-    } catch (...) {
-        return 0.0;
+namespace {
+
+const double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+// ---------------------------------------------------------------------------
+// Python-arithmetic helpers.
+//
+// Everything below the file-level "fp contract(off)" pragma (see top of file)
+// is evaluated one IEEE operation at a time, the way CPython and numpy do:
+// clang's default -ffp-contract=on would otherwise fuse a*b+c into an FMA and
+// change last bits. C++ code that Python itself calls (rdMolDescriptors,
+// rdInfoTheory.InfoEntropy, ...) is called here too, compiled with the same
+// default flags as the Python extension modules.
+// ---------------------------------------------------------------------------
+
+// math.log: ValueError for x <= 0 (nan -> nan, inf -> inf).
+double pyLog(double x) {
+    if (x <= 0.0) {
+        throw std::domain_error("math domain error");
     }
+    return std::log(x);
 }
 
-// Helper to get first element of vector descriptor, return 0.0 if empty
-double getFirst(const std::vector<double>& vec) {
-    return vec.empty() ? 0.0 : vec[0];
+// math.exp: OverflowError when a finite argument overflows.
+double pyExp(double x) {
+    const double r = std::exp(x);
+    if (std::isinf(r) && std::isfinite(x)) {
+        throw std::range_error("math range error");
+    }
+    return r;
 }
 
-// Helper: Information Entropy (Shannon entropy in base 2)
-// From rdkit.ML.InfoTheory.entropy.InfoEntropy
-template <class T>
-double calcInfoEntropy(const std::vector<T>& data) {
-    T nInstances = 0;
-    double accum = 0.0, d;
-    
-    for (const auto& val : data) {
-        nInstances += val;
+// numpy's pairwise summation (pairwise_sum_DOUBLE, numpy 1.26), used by
+// add.reduce and therefore by numpy.trace. Verified bit-for-bit against
+// numpy.trace on random diagonals.
+double numpyPairwiseSum(const double* a, std::size_t n, std::size_t stride) {
+    if (n < 8) {
+        double res = 0.;
+        for (std::size_t i = 0; i < n; ++i) {
+            res += a[i * stride];
+        }
+        return res;
     }
-    
-    if (nInstances != 0) {
-        for (const auto& val : data) {
-            d = static_cast<double>(val) / nInstances;
-            if (d != 0) {
-                accum += -d * std::log(d);
+    if (n <= 128) {
+        double r[8];
+        for (std::size_t j = 0; j < 8; ++j) {
+            r[j] = a[j * stride];
+        }
+        std::size_t i = 8;
+        for (; i < n - (n % 8); i += 8) {
+            for (std::size_t j = 0; j < 8; ++j) {
+                r[j] += a[(i + j) * stride];
+            }
+        }
+        double res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        for (; i < n; ++i) {
+            res += a[i * stride];
+        }
+        return res;
+    }
+    std::size_t n2 = n / 2;
+    n2 -= n2 % 8;
+    return numpyPairwiseSum(a, n2, stride) + numpyPairwiseSum(a + n2 * stride, n - n2, stride);
+}
+
+// rdkit.ML.InfoTheory.entropy.InfoEntropy is the C++ RDInfoTheory::InfoEntropy
+// (rdInfoTheory module) on a float64 array. Call the same template.
+double infoEntropy(std::vector<double> v) {
+    return RDInfoTheory::InfoEntropy(v.data(), static_cast<long int>(v.size()));
+}
+
+// numpy.dot(A, B) for an n x n 0/1 matrix A and float64 B, as computed by the
+// OpenBLAS dgemm numpy links (openblas64 0.3.23): each C[i][j] accumulates
+// fma(A[i][k], B[k][j], acc) sequentially over k inside a K block, and the
+// blocks are added to C in order. K blocks follow OpenBLAS level3.c with
+// GEMM_Q = 128: take 128 while >= 256 remain, split the last (128, 256) in two
+// halves (first = ceil(r/2)). Verified bit-for-bit against numpy.dot for
+// n = 2..700. With A in {0, 1}, fma(a, b, acc) == acc + a*b exactly; a zero
+// entry is skipped unless the B row holds inf/nan (0*inf = nan in the kernel).
+void openblasDotAdjacency(const std::vector<double>& A, const std::vector<double>& B,
+                          std::vector<double>& C, unsigned int n) {
+    std::vector<char> rowFinite(n, 1);
+    for (unsigned int k = 0; k < n; ++k) {
+        for (unsigned int j = 0; j < n; ++j) {
+            if (!std::isfinite(B[k * n + j])) {
+                rowFinite[k] = 0;
+                break;
             }
         }
     }
-    return accum / std::log(2.0);
-}
-
-// Helper: Characteristic Polynomial using Le Verrier-Faddeev-Frame method
-// From rdkit.Chem.Graphs.CharacteristicPolynomial
-// Returns coefficients of characteristic polynomial: [c0, c1, c2, ..., cn]
-// where det(A - λI) = c0 + c1*λ + c2*λ² + ... + cn*λⁿ
-std::vector<double> characteristicPolynomial(const ROMol& mol, const std::vector<std::vector<double>>& adjMat) {
-    unsigned int nAtoms = mol.getNumAtoms();
-    std::vector<double> res(nAtoms + 1, 0.0);
-    res[0] = 1.0;
-    
-    if (nAtoms == 0) return res;
-    
-    // Identity matrix
-    std::vector<std::vector<double>> I(nAtoms, std::vector<double>(nAtoms, 0.0));
-    for (unsigned int i = 0; i < nAtoms; ++i) {
-        I[i][i] = 1.0;
-    }
-    
-    // An = A (adjacency matrix)
-    std::vector<std::vector<double>> An = adjMat;
-    
-    // Le Verrier-Faddeev-Frame method
-    for (unsigned int n = 1; n <= nAtoms; ++n) {
-        // Calculate trace of An
-        double trace = 0.0;
-        for (unsigned int i = 0; i < nAtoms; ++i) {
-            trace += An[i][i];
+    std::vector<double> acc(n);
+    unsigned int k0 = 0;
+    bool first = true;
+    while (k0 < n) {
+        unsigned int kl = n - k0;
+        if (kl >= 256) {
+            kl = 128;
+        } else if (kl > 128) {
+            kl = (kl + 1) / 2;
         }
-        
-        res[n] = trace / static_cast<double>(n);
-        
-        // Bn = An - res[n] * I
-        std::vector<std::vector<double>> Bn(nAtoms, std::vector<double>(nAtoms, 0.0));
-        for (unsigned int i = 0; i < nAtoms; ++i) {
-            for (unsigned int j = 0; j < nAtoms; ++j) {
-                Bn[i][j] = An[i][j] - res[n] * I[i][j];
+        for (unsigned int i = 0; i < n; ++i) {
+            std::fill(acc.begin(), acc.end(), 0.0);
+            for (unsigned int k = k0; k < k0 + kl; ++k) {
+                const double a = A[i * n + k];
+                if (a == 0.0 && rowFinite[k]) {
+                    continue;
+                }
+                const double* b = &B[k * n];
+                for (unsigned int j = 0; j < n; ++j) {
+                    acc[j] = acc[j] + a * b[j];
+                }
             }
-        }
-        
-        // An = A * Bn (matrix multiplication)
-        std::vector<std::vector<double>> AnNew(nAtoms, std::vector<double>(nAtoms, 0.0));
-        for (unsigned int i = 0; i < nAtoms; ++i) {
-            for (unsigned int j = 0; j < nAtoms; ++j) {
-                for (unsigned int k = 0; k < nAtoms; ++k) {
-                    AnNew[i][j] += adjMat[i][k] * Bn[k][j];
+            double* c = &C[i * n];
+            if (first) {
+                for (unsigned int j = 0; j < n; ++j) {
+                    c[j] = acc[j];
+                }
+            } else {
+                for (unsigned int j = 0; j < n; ++j) {
+                    c[j] = c[j] + acc[j];
                 }
             }
         }
-        An = AnNew;
+        first = false;
+        k0 += kl;
     }
-    
-    // Negate coefficients (except c0)
-    for (unsigned int i = 1; i <= nAtoms; ++i) {
-        res[i] *= -1.0;
+}
+
+// abs(Graphs.CharacteristicPolynomial(mol, adjMat)) with
+// adjMat = numpy.equal(Chem.GetDistanceMatrix(mol, False), 1)  (GraphDescriptors.Ipc).
+// Le Verrier-Faddeev-Frame, literally:
+//   I = identity; An = A; res[0] = 1
+//   for n in 1..N: res[n] = 1./n * trace(An); Bn = An - res[n]*I; An = dot(A, Bn)
+//   res[1:] *= -1
+std::vector<double> ipcAbsCharPoly(const ROMol& mol) {
+    const unsigned int n = mol.getNumAtoms();
+    const double* dMat = MolOps::getDistanceMat(mol, false, false, false);
+    std::vector<double> A(static_cast<std::size_t>(n) * n);
+    for (std::size_t i = 0; i < A.size(); ++i) {
+        A[i] = (dMat[i] == 1.0) ? 1.0 : 0.0;
     }
-    
+    std::vector<double> res(n + 1, 0.0);
+    res[0] = 1.0;
+    std::vector<double> An = A;
+    std::vector<double> Bn(A.size());
+    for (unsigned int m = 1; m <= n; ++m) {
+        res[m] = 1. / m * numpyPairwiseSum(An.data(), n, n + 1);
+        for (unsigned int i = 0; i < n; ++i) {
+            for (unsigned int j = 0; j < n; ++j) {
+                Bn[i * n + j] = An[i * n + j] - res[m] * (i == j ? 1.0 : 0.0);
+            }
+        }
+        openblasDotAdjacency(A, Bn, An, n);
+    }
+    for (unsigned int m = 1; m <= n; ++m) {
+        res[m] *= -1;
+    }
+    for (auto& v : res) {
+        v = std::fabs(v);
+    }
     return res;
 }
 
-// Helper: Get adjacency matrix from molecule (1 if bonded, 0 otherwise)
-std::vector<std::vector<double>> getAdjacencyMatrix(const ROMol& mol) {
-    unsigned int nAtoms = mol.getNumAtoms();
-    std::vector<std::vector<double>> adjMat(nAtoms, std::vector<double>(nAtoms, 0.0));
-    
-    for (auto bond : mol.bonds()) {
-        unsigned int i = bond->getBeginAtomIdx();
-        unsigned int j = bond->getEndAtomIdx();
-        adjMat[i][j] = 1.0;
-        adjMat[j][i] = 1.0;
+// GraphDescriptors.BalabanJ, literally. The distance matrix is
+// GetDistanceMatrix(useBO=True, prefix="Balaban"); the adjacency test is done
+// on mol._adjMat, which AvgIpc (called first by CalcMolDescriptors) set to the
+// topological distance matrix: "adjMat[i, j] == 1" is then "bonded".
+// s = sum(dMat) is Python's builtin sum over rows (unreachable pairs count as
+// 1e8, as in Python).
+double pyBalabanJ(const ROMol& mol) {
+    const unsigned int n = mol.getNumAtoms();
+    const double* dMat = MolOps::getDistanceMat(mol, true, false, false, "Balaban");
+    const double* adjMat = MolOps::getDistanceMat(mol, false, false, false);
+    std::vector<double> s(n, 0.0);
+    for (unsigned int i = 0; i < n; ++i) {
+        for (unsigned int j = 0; j < n; ++j) {
+            s[j] = s[j] + dMat[i * n + j];
+        }
     }
-    
-    return adjMat;
+    const int q = static_cast<int>(mol.getNumBonds());
+    const int mu = q - static_cast<int>(n) + 1;
+    double sum_ = 0.;
+    for (unsigned int i = 0; i < n; ++i) {
+        const double si = s[i];
+        for (unsigned int j = i; j < n; ++j) {
+            if (adjMat[i * n + j] == 1) {
+                sum_ += 1. / std::sqrt(si * s[j]);
+            }
+        }
+    }
+    if (mu + 1 != 0) {
+        return static_cast<double>(q) / static_cast<double>(mu + 1) * sum_;
+    }
+    return 0.0;
 }
 
-// Helper: Calculate Ipc (Information Content of characteristic polynomial coefficients)
-double calcIpc(const ROMol& mol, bool avg = false) {
-    try {
-        // Get adjacency matrix (1 if bonded, 0 otherwise)
-        std::vector<std::vector<double>> adjMat = getAdjacencyMatrix(mol);
-        
-        // Calculate characteristic polynomial
-        std::vector<double> cPoly = characteristicPolynomial(mol, adjMat);
-        
-        // Take absolute values
-        std::vector<double> absCPoly;
-        for (double val : cPoly) {
-            absCPoly.push_back(std::abs(val));
-        }
-        
-        // Calculate information entropy
-        double entropy = calcInfoEntropy(absCPoly);
-        
-        if (avg) {
-            return entropy;
-        } else {
-            // Sum of coefficients * entropy
-            double sum = 0.0;
-            for (double val : absCPoly) {
-                sum += val;
-            }
-            return sum * entropy;
-        }
-    } catch (...) {
+// GraphDescriptors.BertzCT(mol, cutoff=100, forceDMat=1), literally, including
+// dict insertion order (which fixes the summation order of the entropies).
+double pyBertzCT(const ROMol& mol) {
+    const int cutoff = 100;
+    const unsigned int numAtoms = mol.getNumAtoms();
+    if (numAtoms < 2) {
         return 0.0;
     }
+    // _CreateBondDictEtc
+    std::map<std::pair<unsigned int, unsigned int>, double> bondDict;
+    std::vector<std::vector<unsigned int>> nList(numAtoms);
+    for (const auto bond : mol.bonds()) {
+        unsigned int atom1 = bond->getBeginAtomIdx();
+        unsigned int atom2 = bond->getEndAtomIdx();
+        if (atom1 > atom2) {
+            std::swap(atom1, atom2);
+        }
+        bondDict[{atom1, atom2}] = bond->getIsAromatic() ? 1.5 : bond->getBondTypeAsDouble();
+        if (std::find(nList[atom1].begin(), nList[atom1].end(), atom2) == nList[atom1].end()) {
+            nList[atom1].push_back(atom2);
+        }
+        if (std::find(nList[atom2].begin(), nList[atom2].end(), atom1) == nList[atom2].end()) {
+            nList[atom2].push_back(atom1);
+        }
+    }
+    for (auto& element : nList) {
+        std::sort(element.begin(), element.end());
+    }
+    auto lookUpBondOrder = [&bondDict](unsigned int a1, unsigned int a2) {
+        return a1 < a2 ? bondDict.at({a1, a2}) : bondDict.at({a2, a1});
+    };
+
+    // _AssignSymmetryClasses: rows of the (forced) Balaban BO distance matrix,
+    // sorted, cut at `cutoff` columns, keyed by '%.4f,' * ncols.
+    const double* bdMat = MolOps::getDistanceMat(mol, true, false, true, "Balaban");
+    const unsigned int nCols = std::min<unsigned int>(numAtoms, cutoff);
+    std::map<std::string, int> keysSeen;
+    std::vector<int> symmetryClasses(numAtoms);
+    std::vector<double> row(numAtoms);
+    char buf[64];
+    for (unsigned int i = 0; i < numAtoms; ++i) {
+        std::copy(bdMat + i * numAtoms, bdMat + (i + 1) * numAtoms, row.begin());
+        std::sort(row.begin(), row.end());
+        std::string key;
+        for (unsigned int j = 0; j < nCols; ++j) {
+            std::snprintf(buf, sizeof(buf), "%.4f,", row[j]);
+            key += buf;
+        }
+        const int next = static_cast<int>(keysSeen.size());
+        symmetryClasses[i] = keysSeen.emplace(key, next).first->second + 1;
+    }
+
+    // atomTypeDict / connectionDict with Python dict insertion order.
+    std::vector<std::pair<int, int>> atomTypes;
+    std::vector<std::pair<std::array<int, 3>, double>> connections;
+    std::map<std::array<int, 3>, std::size_t> connectionIdx;
+    auto addConnection = [&](const std::array<int, 3>& key, double numConnections) {
+        auto it = connectionIdx.find(key);
+        if (it == connectionIdx.end()) {
+            connectionIdx.emplace(key, connections.size());
+            connections.emplace_back(key, 0 + numConnections);
+        } else {
+            connections[it->second].second = connections[it->second].second + numConnections;
+        }
+    };
+    for (unsigned int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
+        const int hingeAtomNumber = mol.getAtomWithIdx(atomIdx)->getAtomicNum();
+        auto at = std::find_if(atomTypes.begin(), atomTypes.end(),
+                               [hingeAtomNumber](const auto& p) { return p.first == hingeAtomNumber; });
+        if (at == atomTypes.end()) {
+            atomTypes.emplace_back(hingeAtomNumber, 1);
+        } else {
+            ++at->second;
+        }
+        const int hingeAtomClass = symmetryClasses[atomIdx];
+        const auto& neighbors = nList[atomIdx];
+        const std::size_t numNeighbors = neighbors.size();
+        for (std::size_t i = 0; i < numNeighbors; ++i) {
+            const unsigned int neighbor_iIdx = neighbors[i];
+            const int NiClass = symmetryClasses[neighbor_iIdx];
+            const double bond_i_order = lookUpBondOrder(atomIdx, neighbor_iIdx);
+            if (bond_i_order > 1 && neighbor_iIdx > atomIdx) {
+                const double numConnections = bond_i_order * (bond_i_order - 1) / 2;
+                // 2-tuple key (min, max); third slot 0 never occurs in a 3-tuple
+                addConnection({std::min(hingeAtomClass, NiClass), std::max(hingeAtomClass, NiClass), 0},
+                              numConnections);
+            }
+            for (std::size_t j = i + 1; j < numNeighbors; ++j) {
+                const unsigned int neighbor_jIdx = neighbors[j];
+                const int NjClass = symmetryClasses[neighbor_jIdx];
+                const double bond_j_order = lookUpBondOrder(atomIdx, neighbor_jIdx);
+                const double numConnections = bond_i_order * bond_j_order;
+                addConnection({std::min(NiClass, NjClass), hingeAtomClass, std::max(NiClass, NjClass)},
+                              numConnections);
+            }
+        }
+    }
+    std::vector<double> connectionList;
+    if (connections.empty()) {
+        connectionList.push_back(1.0);  // connectionDict = {'a': 1}
+    } else {
+        for (const auto& c : connections) {
+            connectionList.push_back(c.second);
+        }
+    }
+
+    // _CalculateEntropies
+    double totConnections = 0;
+    for (double v : connectionList) {
+        totConnections = totConnections + v;
+    }
+    const double log2val = std::log(2.0);
+    const double connectionIE =
+        totConnections * (infoEntropy(connectionList) + pyLog(totConnections) / log2val);
+    std::vector<double> atomTypeList;
+    for (const auto& p : atomTypes) {
+        atomTypeList.push_back(static_cast<double>(p.second));
+    }
+    const double atomTypeIE = static_cast<double>(numAtoms) * infoEntropy(atomTypeList);
+    return atomTypeIE + connectionIE;
 }
+
+}  // namespace
 
 // Helper functions for cached SMARTS queries (EXACT Osmordred pattern with IIFE)
 const std::vector<std::shared_ptr<RWMol>>& GetQEDAcceptorQueries() {
@@ -461,55 +650,7 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
     } catch (...) {
         estateIndices = std::vector<double>(mol.getNumAtoms(), 0.0);
     }
-    
-    // Get BalabanJ - Python uses useBO=1, so we implement it directly here
-    // Python: GetDistanceMatrix(mol, useBO=1, useAtomWts=0)
-    double balabanJ = 0.0;
-    try {
-        double q = static_cast<double>(mol.getNumBonds());
-        unsigned int n = mol.getNumAtoms();
-        
-        // Get distance matrix with useBO=1 (bond order) to match Python
-        double* dMat = MolOps::getDistanceMat(mol, true, false, false);  // useBO=1, useAtomWts=0
-        // Get adjacency matrix (useBO=0 for adjacency)
-        double* adjMat = MolOps::getAdjacencyMatrix(mol, false, false, false, "NoBO");
-        
-        // Calculate vertex degrees s from distance matrix
-        // Python's _VertexDegrees: row sum of distance matrix (sum of distances for each atom)
-        std::vector<double> s(n, 0.0);
-        for (unsigned int i = 0; i < n; ++i) {
-            for (unsigned int j = 0; j < n; ++j) {
-                double dist = dMat[i * n + j];
-                if (dist < 1e6) {  // Valid distance
-                    s[i] += dist;
-                }
-            }
-        }
-        
-        double mu = q - n + 1;
-        double sum_ = 0.0;
-        for (unsigned int i = 0; i < n; ++i) {
-            double si = s[i];
-            for (unsigned int j = i; j < n; ++j) {
-                if (adjMat[i * n + j] == 1) {  // Adjacent atoms
-                    sum_ += 1.0 / std::sqrt(si * s[j]);
-                }
-            }
-        }
-        
-        if (mu + 1 != 0) {
-            balabanJ = (q / (mu + 1)) * sum_;
-        }
-        
-        // NOTE: Do NOT delete[] dMat or adjMat - RDKit caches them in molecule properties
-        // The documentation says "The caller should NOT delete this pointer"
-    } catch (...) {
-        balabanJ = 0.0;
-    }
-    
-    // calcBertzCT returns a double in the split v3 sources
-    double bertzCT = calcBertzCT(mol);
-    
+
     // 0: MaxAbsEStateIndex
     if (!estateIndices.empty()) {
         double maxAbs = 0.0;
@@ -892,16 +1033,36 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
             for (int i = 0; i < 8; ++i) descriptors.push_back(bcutNaN);
         }
     }
-    
-    // 26: AvgIpc - Average Information Content
-    // Uses characteristic polynomial of adjacency matrix (proper implementation)
-    descriptors.push_back(calcIpc(mol, true));  // avg = true
-    
-    // 27: BalabanJ
-    descriptors.push_back(balabanJ);
-    
-    // 28: BertzCT
-    descriptors.push_back(bertzCT);
+    // 26-28: AvgIpc, BalabanJ, BertzCT -- literal ports of GraphDescriptors.py
+    // (pure Python there), evaluated in CalcMolDescriptors order.
+    double avgIpcValue = kNaN;
+    double ipcValue = kNaN;
+    try {
+        const std::vector<double> cPoly = ipcAbsCharPoly(mol);
+        const double entropy = infoEntropy(cPoly);
+        double cPolySum = 0;
+        for (double v : cPoly) {
+            cPolySum = cPolySum + v;
+        }
+        avgIpcValue = entropy;
+        ipcValue = cPolySum * entropy;
+    } catch (...) {
+    }
+    descriptors.push_back(avgIpcValue);  // 26: AvgIpc
+
+    double balabanJ = kNaN;
+    try {
+        balabanJ = pyBalabanJ(mol);
+    } catch (...) {
+    }
+    descriptors.push_back(balabanJ);  // 27: BalabanJ
+
+    double bertzCT = kNaN;
+    try {
+        bertzCT = pyBertzCT(mol);
+    } catch (...) {
+    }
+    descriptors.push_back(bertzCT);  // 28: BertzCT
     
     // 29: Chi0 - Python uses sum(sqrt(1/degree)) for all atoms with degree > 0
     // From equations (1),(9) and (10) of Rev. Comp. Chem. vol 2, 367-422, (1991)
@@ -968,9 +1129,8 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
     // 41: HallKierAlpha
     descriptors.push_back(calcHallKierAlpha(mol));
     
-    // 42: Ipc - Information Content
-    // Uses characteristic polynomial of adjacency matrix (proper implementation)
-    descriptors.push_back(calcIpc(mol, false));  // avg = false
+    // 42: Ipc = sum(cPoly) * InfoEntropy(cPoly)  (cPoly computed with AvgIpc above)
+    descriptors.push_back(ipcValue);
     
     // 43: Kappa1
     descriptors.push_back(calcKappa1(mol));
