@@ -1767,34 +1767,6 @@ double getEtaGamma(const Atom &atom) {
   return getCoreCount(atom) / beta;
 }
 
-//  Etacorecount of reference can be merge with next function with an additional
-//  parameter if needed...
-double calculateEtaCoreCountRef(const ROMol &mol, bool averaged) {
-  const ROMol *targetMol = &mol;  // Default to the input molecule
-  // ROMol* molWithHs = nullptr;
-  targetMol = cloneAndModifyMolecule(
-      mol, false,
-      false);  // this is false, false based on the python source code
-
-  // Handle potential failure in cloning
-  if (!targetMol) {
-    // Suppress noisy warnings: return NaN silently
-    delete targetMol;
-    return std::numeric_limits<double>::quiet_NaN();  // Return NaN instead of
-                                                      // crashing
-  }
-
-  double coreCount = 0.0;
-  for (const auto &atom : targetMol->atoms()) {
-    coreCount += getCoreCount(*atom);
-  }
-  if (averaged) {
-    coreCount /= mol.getNumHeavyAtoms();
-  }
-  delete targetMol;
-  return coreCount;
-}
-
 //  Etacorecount
 std::vector<double> calculateEtaCoreCount(const ROMol &mol) {
   double coreCount = 0.0;
@@ -1912,36 +1884,14 @@ std::vector<double> calculateEtaVEMCount(const ROMol &mol) {
   };
 }
 
-// Function to Calculate ETA Composite Index
-double calculateEtaCompositeIndex(const ROMol &mol, bool useReference,
-                                  bool local, bool averaged) {
-  // Fetch molecule (reference or input)
+// Sum of the ETA composite index over atom pairs of targetMol (all
+// connected pairs, or bonded pairs only when local is set), not averaged.
+double calculateEtaCompositeSum(const ROMol &targetMol, bool local) {
+  Eigen::MatrixXd distanceMatrix = calculateDistanceMatrix(targetMol);
+  int numAtoms = targetMol.getNumAtoms();
 
-  const ROMol *targetMol = &mol;  // Default to the input molecule
-  // ROMol* molWithHs = nullptr;
-
-  if (useReference) {
-    targetMol = cloneAndModifyMolecule(
-        mol, false,
-        false);  // this is false, false based on the python source code
-
-    // Handle potential failure in cloning
-    if (!targetMol) {
-      // Suppress noisy warnings: return NaN silently
-      delete targetMol;
-      return std::numeric_limits<double>::quiet_NaN();  // Return NaN instead of
-                                                        // crashing
-    }
-  }
-
-  // Calculate distance matrix
-
-  Eigen::MatrixXd distanceMatrix = calculateDistanceMatrix(*targetMol);
-  int numAtoms = targetMol->getNumAtoms();
-
-  // Define gamma values for each atom
   std::vector<double> gamma(numAtoms, 0.0);
-  for (const auto &atom : targetMol->atoms()) {
+  for (const auto &atom : targetMol.atoms()) {
     gamma[atom->getIdx()] = getEtaGamma(*atom);
   }
 
@@ -1955,124 +1905,11 @@ double calculateEtaCompositeIndex(const ROMol &mol, bool useReference,
                        (distanceMatrix(i, j) * distanceMatrix(i, j)));
     }
   }
-
-  // Averaged value if needed
-  if (averaged) {
-    eta /= numAtoms;
-  }
-  if (useReference) {
-    delete targetMol;
-  }
   return eta;
 }
 
-std::vector<double> calculateEtaCompositeIndices(const ROMol &mol) {
-  std::vector<double> etaValues(8, 0.0);
-
-  // Define options for different cases
-  std::vector<std::tuple<bool, bool, bool>> options = {
-      {false, false, false},  // ETA_eta
-      {false, false, true},   // AETA_eta
-      {false, true, false},   // ETA_eta_L
-      {false, true, true},    // AETA_eta_L
-      {true, false, false},   // ETA_eta_R
-      {true, false, true},    // AETA_eta_R
-      {true, true, false},    // ETA_eta_RL
-      {true, true, true}      // AETA_eta_RL
-  };
-
-  for (size_t idx = 0; idx < options.size(); ++idx) {
-    bool useReference = std::get<0>(options[idx]);
-    bool local = std::get<1>(options[idx]);
-    bool averaged = std::get<2>(options[idx]);
-
-    // Fetch molecule (reference or input)
-    const ROMol *targetMol = &mol;  // Default to the input molecule
-    if (useReference) {
-      targetMol = cloneAndModifyMolecule(
-          mol, false, false);  // Clone with modifications (why not "True")
-
-      // Handle potential failure in cloning
-      if (!targetMol) {
-        // Suppress noisy warnings: return NaN silently
-        delete targetMol;
-        return std::vector<double>(
-            8, std::numeric_limits<double>::quiet_NaN());  // Return vector with
-                                                           // NaN
-      }
-    }
-
-    // Calculate distance matrix
-    Eigen::MatrixXd distanceMatrix = calculateDistanceMatrix(*targetMol);
-    int numAtoms = targetMol->getNumAtoms();
-
-    // Define gamma values for each atom
-    std::vector<double> gamma(numAtoms, 0.0);
-    for (const auto &atom : targetMol->atoms()) {
-      gamma[atom->getIdx()] = getEtaGamma(*atom);
-    }
-
-    // ETA calculation using the optimized "triangle computation"
-    double eta = 0.0;
-    for (int i = 0; i < numAtoms; ++i) {
-      for (int j = i + 1; j < numAtoms; ++j) {
-        if (local && distanceMatrix(i, j) != 1.0) continue;
-        if (!local && distanceMatrix(i, j) == 0.0) continue;
-
-        eta += std::sqrt(gamma[i] * gamma[j] /
-                         (distanceMatrix(i, j) * distanceMatrix(i, j)));
-      }
-    }
-
-    // Averaged value if required
-    if (averaged) {
-      eta /= numAtoms;
-    }
-
-    etaValues[idx] = eta;
-
-    if (useReference) {
-      delete targetMol;  // Clean up dynamically allocated molecule
-    }
-  }
-
-  return etaValues;
-}
-
-std::vector<double> calculateEtaFunctionalityIndices(const ROMol &mol) {
-  std::vector<double> etaFunctionalityValues(4, 0.0);
-
-  // Define options for different cases
-  std::vector<std::tuple<bool, bool>> options = {
-      {false, false},  // ETA_eta_F
-      {false, true},   // AETA_eta_F
-      {true, false},   // ETA_eta_FL
-      {true, true}     // AETA_eta_FL
-  };
-
-  for (size_t idx = 0; idx < options.size(); ++idx) {
-    bool local = std::get<0>(options[idx]);
-    bool averaged = std::get<1>(options[idx]);
-
-    // Calculate eta without reference and with reference
-    double eta = calculateEtaCompositeIndex(mol, false, local, false);
-    double etaRef = calculateEtaCompositeIndex(mol, true, local, false);
-
-    // Compute functionality index
-    double etaF = etaRef - eta;
-
-    // Apply averaging if needed
-    if (averaged) {
-      etaF /= mol.getNumAtoms();
-    }
-
-    etaFunctionalityValues[idx] = etaF;
-  }
-
-  return etaFunctionalityValues;
-}
-
-std::vector<double> calculateEtaBranchingIndices(const ROMol &mol) {
+std::vector<double> calculateEtaBranchingIndices(const ROMol &mol,
+                                                 double eta_RL) {
   std::vector<double> etaBranchingValues(4, 0.0);
   int atomCount = mol.getNumAtoms();
 
@@ -2084,8 +1921,6 @@ std::vector<double> calculateEtaBranchingIndices(const ROMol &mol) {
   // Calculate non-local branching term
   double eta_NL =
       (atomCount == 2) ? 1.0 : (std::sqrt(2.0) + 0.5 * (atomCount - 3));
-
-  double eta_RL = calculateEtaCompositeIndex(mol, true, true, false);
 
   // Calculate ring count once
   double ringCount = Descriptors::calcNumRings(mol);
@@ -2301,34 +2136,55 @@ std::vector<double> calcExtendedTopochemicalAtom(const ROMol &mol) {
   results.push_back(EtaVEM[6]);  // ETA_beta_ns_d
   results.push_back(EtaVEM[7]);  // AETA_beta_ns_d
 
+  // The composite, functionality, branching and delta-alpha descriptors all
+  // use the same four ETA sums (input / reference skeleton, all pairs /
+  // bonded pairs); build the reference skeleton and each sum only once.
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double numAtoms = kekulizedMol->getNumAtoms();
+  std::unique_ptr<RWMol> refMol(
+      cloneAndModifyMolecule(*kekulizedMol, false, false));
+  const double eta = calculateEtaCompositeSum(*kekulizedMol, false);
+  const double eta_L = calculateEtaCompositeSum(*kekulizedMol, true);
+  const double eta_R = refMol ? calculateEtaCompositeSum(*refMol, false) : nan;
+  const double eta_RL = refMol ? calculateEtaCompositeSum(*refMol, true) : nan;
+
   // ETA Descriptors   ==  "EtaCompositeIndex"
-  std::vector<double> ECI = calculateEtaCompositeIndices(*kekulizedMol);
-  results.push_back(ECI[0]);  // ETA_eta
-  results.push_back(ECI[1]);  // AETA_eta
-  results.push_back(ECI[2]);  // ETA_eta_L
-  results.push_back(ECI[3]);  // AETA_eta_L
-  results.push_back(ECI[4]);  // ETA_eta_R
-  results.push_back(ECI[5]);  // AETA_eta_R
-  results.push_back(ECI[6]);  // ETA_eta_RL
-  results.push_back(ECI[7]);  // AETA_eta_RL
+  if (refMol) {
+    const double numRefAtoms = refMol->getNumAtoms();
+    results.push_back(eta);                  // ETA_eta
+    results.push_back(eta / numAtoms);       // AETA_eta
+    results.push_back(eta_L);                // ETA_eta_L
+    results.push_back(eta_L / numAtoms);     // AETA_eta_L
+    results.push_back(eta_R);                // ETA_eta_R
+    results.push_back(eta_R / numRefAtoms);  // AETA_eta_R
+    results.push_back(eta_RL);               // ETA_eta_RL
+    results.push_back(eta_RL / numRefAtoms);  // AETA_eta_RL
+  } else {
+    results.insert(results.end(), 8, nan);
+  }
 
   // Functionality and Branching EtaFunctionalityIndex not working for
   // heteroatom molecule...
-  std::vector<double> EFI = calculateEtaFunctionalityIndices(*kekulizedMol);
-  results.push_back(EFI[0]);  // ETA_eta_F
-  results.push_back(EFI[1]);  // AETA_eta_F
-  results.push_back(EFI[2]);  // ETA_eta_FL
-  results.push_back(EFI[3]);  // AETA_eta_FL
+  results.push_back(eta_R - eta);                 // ETA_eta_F
+  results.push_back((eta_R - eta) / numAtoms);    // AETA_eta_F
+  results.push_back(eta_RL - eta_L);              // ETA_eta_FL
+  results.push_back((eta_RL - eta_L) / numAtoms);  // AETA_eta_FL
 
   // EtaBranchingIndex  working
-  std::vector<double> EBI = calculateEtaBranchingIndices(*kekulizedMol);
+  std::vector<double> EBI = calculateEtaBranchingIndices(*kekulizedMol, eta_RL);
   results.push_back(EBI[0]);  // ETA_eta_B
   results.push_back(EBI[1]);  // AETA_eta_B
   results.push_back(EBI[2]);  // ETA_eta_BR
   results.push_back(EBI[3]);  // AETA_eta_BR
 
   //"EtaDeltaAlpha" :  dAlpha_A, dAlpha_B  correct
-  double alpha_R = calculateEtaCoreCountRef(*kekulizedMol, false);
+  double alpha_R = nan;
+  if (refMol) {
+    alpha_R = 0.0;
+    for (const auto &atom : refMol->atoms()) {
+      alpha_R += getCoreCount(*atom);
+    }
+  }
   std::vector<double> EDA =
       calculateEtaDeltaAlpha(*kekulizedMol, alpha, alpha_R);
   results.push_back(EDA[0]);
