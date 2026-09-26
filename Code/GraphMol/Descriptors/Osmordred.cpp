@@ -146,7 +146,7 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
   append(calcConstitutional(ctx));      // addNames("Constitutional", 16);
   append(calcDetourMatrixDescsL(mol));  // addNames("DetourMatrix", 14);
   append(calcDistMatrixDescsL(mol));    // addNames("DistanceMatrix", 12);
-  append(calcEStateDescs(mol, doExEstate));  // addNames("EState", 404);
+  append(calcEStateDescs(ctx, doExEstate));  // addNames("EState", 404);
   append1(calcEccentricConnectivityIndex(
       mol));  // addNames("EccentricConnectivityIndex", 1);
   append(calcExtendedTopochemicalAtom(
@@ -187,7 +187,7 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
   append(calcAlphaKappaShapeIndex(mol));  // addNames("AlphaKappaShapeIndex",
                                           // 3);
   append(calcHEStateDescs(mol));  // addNames("HEState", 88);
-  append(calcBEStateDescs(mol));  // addNames("BEState", 1460);
+  append(calcBEStateDescs(ctx));  // addNames("BEState", 1460);
   append(calcAbrahams(mol));      // addNames("Abrahams", 6);
   append(calcANMat(mol));         // addNames("ANMat", 25);
   append(calcASMat(mol));         // addNames("ASMat", 20);

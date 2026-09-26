@@ -7,6 +7,8 @@
 
 #include <Eigen/Dense>  // we should try to remove those...
 
+#include <GraphMol/Substruct/SubstructMatch.h>
+
 #include <memory>
 
 namespace RDKit {
@@ -34,6 +36,10 @@ class OsmordredContext {
   //! on it but must not modify its structure.
   const ROMol &molWithHs();
 
+  //! unique matches of every extended EState atom-type query on mol (index =
+  //! query index); filled by the EState code on first use
+  std::unique_ptr<std::vector<std::vector<MatchVectType>>> estateExtMatches;
+
  private:
   const ROMol &d_mol;
   std::unique_ptr<ROMol> d_molWithHs;
@@ -53,6 +59,8 @@ std::vector<double> calcConstitutional(OsmordredContext &ctx);
 std::vector<double> calcRNCG_RPCG(OsmordredContext &ctx);
 std::vector<double> calcAutoCorrelation(OsmordredContext &ctx);
 double calcFramework(OsmordredContext &ctx);
+std::vector<double> calcEStateDescs(OsmordredContext &ctx, bool extended);
+std::vector<double> calcBEStateDescs(OsmordredContext &ctx);
 template <class T>
 double InfoEntropy(const std::vector<T> &data) {
   T nInstances = 0;

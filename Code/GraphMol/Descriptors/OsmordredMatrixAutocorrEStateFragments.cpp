@@ -909,9 +909,44 @@ getEStateQueries(bool extended) {
   return extended ? GetesExtQueries() : GetesQueries();
 }
 
+// Unique matches (uniquify = true) of every EState atom-type query on mol, in
+// query order; queries that cannot match (or failed to parse) get no matches.
+std::vector<std::vector<MatchVectType>> computeEStateMatches(
+    const ROMol &mol,
+    const std::vector<std::pair<std::string, std::shared_ptr<RWMol>>>
+        &queries) {
+  std::vector<std::vector<MatchVectType>> matches(queries.size());
+  for (size_t i = 0; i < queries.size(); ++i) {
+    const auto &pattern = queries[i].second;
+    if (pattern && queryMolMayMatch(mol, *pattern)) {
+      SubstructMatch(mol, *pattern, matches[i], true);
+    }
+  }
+  return matches;
+}
+
+// The extended EState matches are used by both the EState and the BEState
+// blocks: compute them once per molecule.
+const std::vector<std::vector<MatchVectType>> &getEStateExtMatches(
+    OsmordredContext &ctx) {
+  if (!ctx.estateExtMatches) {
+    ctx.estateExtMatches =
+        std::make_unique<std::vector<std::vector<MatchVectType>>>(
+            computeEStateMatches(ctx.mol(), GetesExtQueries()));
+  }
+  return *ctx.estateExtMatches;
+}
+
 // Function to calculate EState fingerprints
-std::vector<double> calcEStateDescs(const ROMol &mol, bool extended) {
+std::vector<double> calcEStateDescs(OsmordredContext &ctx, bool extended) {
+  const ROMol &mol = ctx.mol();
   const auto &queries = getEStateQueries(extended);
+  std::vector<std::vector<MatchVectType>> localMatches;
+  if (!extended) {
+    localMatches = computeEStateMatches(mol, queries);
+  }
+  const auto &queryMatches =
+      extended ? getEStateExtMatches(ctx) : localMatches;
   // const std::vector<std::pair<std::string, std::string>> esPat = extended ?
   // esPatternsFromOEState : esPatterns;
   size_t nPatts = queries.size();
@@ -924,14 +959,8 @@ std::vector<double> calcEStateDescs(const ROMol &mol, bool extended) {
   // Calculate EState indices for the molecule
   std::vector<double> esIndices = calcEStateIndices(mol);
 
-  size_t i = 0;
-
-  for (const auto &[name, pattern] : queries) {
-    // Find all substructure matches
-    std::vector<MatchVectType> matches;
-    if (queryMolMayMatch(mol, *pattern)) {
-      SubstructMatch(mol, *pattern, matches, true);
-    }
+  for (size_t i = 0; i < nPatts; ++i) {
+    const auto &matches = queryMatches[i];
 
     // Update counts, sums, max, and min
     counts[i] = static_cast<int>(matches.size());
@@ -948,8 +977,6 @@ std::vector<double> calcEStateDescs(const ROMol &mol, bool extended) {
       maxValues[i] = 0.0;
       minValues[i] = 0.0;
     }
-
-    ++i;  // Increment the index
   }
 
   // Concatenate counts, sums, maxValues, and minValues into a single vector
@@ -963,6 +990,11 @@ std::vector<double> calcEStateDescs(const ROMol &mol, bool extended) {
                  minValues.end());  // Min values
 
   return results;
+}
+
+std::vector<double> calcEStateDescs(const ROMol &mol, bool extended) {
+  OsmordredContext ctx(mol);
+  return calcEStateDescs(ctx, extended);
 }
 
 std::vector<double> calcHBDHBAtDescs(const ROMol &mol,
@@ -2405,22 +2437,13 @@ struct BondEStateResult {
 
 // retreive the positional of the
 std::vector<int> NamePosES(
-    const ROMol &mol,
-    const std::vector<std::pair<std::string, std::shared_ptr<RWMol>>>
-        &queries) {
-  size_t nAtoms = mol.getNumAtoms();
+    size_t nAtoms, const std::vector<std::vector<MatchVectType>> &queryMatches) {
   std::vector<int> pos(nAtoms, 0);  // Initialize positions with 0
-  for (unsigned int idx = 0; idx < queries.size(); idx++) {
-    const auto &entry = queries[idx];
-    if (!entry.second) continue;  // Skip invalid SMARTS patterns
-    if (!queryMolMayMatch(mol, *entry.second)) continue;
-
-    std::vector<MatchVectType> qmatches;
-    if (SubstructMatch(mol, *entry.second, qmatches, true)) {
-      for (unsigned int i = 0; i < qmatches.size(); ++i) {
-        int atomIdx = qmatches[i][0].second;
-        pos[atomIdx] = idx + 1;
-      }
+  for (unsigned int idx = 0; idx < queryMatches.size(); idx++) {
+    const auto &qmatches = queryMatches[idx];
+    for (unsigned int i = 0; i < qmatches.size(); ++i) {
+      int atomIdx = qmatches[i][0].second;
+      pos[atomIdx] = idx + 1;
     }
   }
 
@@ -2428,7 +2451,8 @@ std::vector<int> NamePosES(
 }
 
 // Tetko version
-BondEStateResult getBEStateFeatures(const ROMol &mol, bool extended) {
+BondEStateResult getBEStateFeatures(OsmordredContext &ctx, bool extended) {
+  const ROMol &mol = ctx.mol();
   size_t nBonds = mol.getNumBonds();
   size_t nAtoms = mol.getNumAtoms();
 
@@ -2444,8 +2468,12 @@ BondEStateResult getBEStateFeatures(const ROMol &mol, bool extended) {
   std::vector<double> Iij(nBonds, 0.0);
   std::vector<std::string> BEScode(nBonds);
 
-  const auto &queries = extended ? GetesExtQueries() : GetesQueries();
-  const std::vector<int> pos = NamePosES(mol, queries);
+  std::vector<std::vector<MatchVectType>> localMatches;
+  if (!extended) {
+    localMatches = computeEStateMatches(mol, GetesQueries());
+  }
+  const std::vector<int> pos =
+      NamePosES(nAtoms, extended ? getEStateExtMatches(ctx) : localMatches);
 
   // Compute bond contributions
   for (size_t t = 0; t < nBonds; ++t) {
@@ -2538,12 +2566,17 @@ BondEStateResult getBEStateFeatures(const ROMol &mol, bool extended) {
   return {SumKeys, BEStotal, SumBES, nBES, minBES, maxBES};
 }
 
+BondEStateResult getBEStateFeatures(const ROMol &mol, bool extended) {
+  OsmordredContext ctx(mol);
+  return getBEStateFeatures(ctx, extended);
+}
+
 // Function to compute Bond E-State fingerprints
-std::vector<double> calcBEStateDescs(const ROMol &mol) {
+std::vector<double> calcBEStateDescs(OsmordredContext &ctx) {
   // Call the function to calculate Bond E-State descriptors using the extended
   // patterns (aka true)
   auto [SumKeys_i, BEStotal_i, SumBES_i, nBES_i, minBES_i, maxBES_i] =
-      getBEStateFeatures(mol, true);
+      getBEStateFeatures(ctx, true);
 
   const auto &orgbondkeys = getOrganicBondKeys();
 
@@ -2610,6 +2643,11 @@ std::vector<double> calcBEStateDescs(const ROMol &mol) {
                             maxBES.end());
 
   return concatenatedResult;
+}
+
+std::vector<double> calcBEStateDescs(const ROMol &mol) {
+  OsmordredContext ctx(mol);
+  return calcBEStateDescs(ctx);
 }
 
 static const std::vector<std::string> AFragments = {
