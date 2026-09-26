@@ -60,11 +60,6 @@ namespace RDKit {
 namespace Descriptors {
 namespace Osmordred {
 
-// Defined (and exported) in OsmordredBasicPhyschemCountsRules.cpp but not declared in
-// Osmordred.h; declared here so this file does not modify the v3 sources.
-std::vector<double> calcEState_VSA(const ROMol &mol);
-std::vector<double> calcVSA_EState(const ROMol &mol);
-
 namespace {
 
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
@@ -590,6 +585,7 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
     // Implement EState indices calculation matching Python's EStateIndices function
     // Reference: Hall, Mohney and Kier. JCICS _31_ 76-81 (1991)
     std::vector<double> estateIndices;
+    bool estateOk = true;
     try {
         const PeriodicTable* tbl = PeriodicTable::getTable();
         unsigned int nAtoms = mol.getNumAtoms();
@@ -642,6 +638,7 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
         // The documentation says "The caller should NOT delete this pointer"
     } catch (...) {
         estateIndices.clear();  // -> NaN below, as when Python raises
+        estateOk = false;
     }
 
     // 0-3: Max/MaxAbs/Min/MinAbs EState index: Python builtin max()/min() over
@@ -1132,38 +1129,45 @@ std::vector<double> extractRDKitDescriptors(const ROMol& mol) {
     // 83: TPSA
     descriptors.push_back(calcTPSA(mol));
     
-    // 84-94: EState_VSA1-11 - Use exported calcEState_VSA from Osmordred
-    // Python order: 1, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9
-    // C++ indices:  0,  9, 10, 1, 2, 3, 4, 5, 6, 7, 8
-    try {
-        std::vector<double> estateVSA = calcEState_VSA(mol);
-        int pythonOrder[11] = {0, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8};
-        for (int i = 0; i < 11; ++i) {
-            int cppIdx = pythonOrder[i];
-            descriptors.push_back(cppIdx < static_cast<int>(estateVSA.size()) ? estateVSA[cppIdx] : kNaN);
+    // 84-104: EState_VSA1-11 and VSA_EState1-10 -- literal ports of
+    // EState/EState_VSA.py (pure Python): EState indices binned by
+    // bisect_right against the Labute ASA atom contributions
+    // (MolSurf._LabuteHelper = rdMolDescriptors._CalcLabuteASAContribs).
+    // Python _descList order: bin 1, 10, 11, 2..9 and 1, 10, 2..9.
+    {
+        static const double estateBins[] = {-0.390, 0.290, 0.717, 1.165, 1.540,
+                                            1.807,  2.05,  4.69,  9.17,  15.0};
+        static const double vsaBins[] = {4.78, 5.00, 5.410, 5.740, 6.00, 6.07, 6.45, 7.00, 11.0};
+        std::vector<double> estateVSA(std::size(estateBins) + 1, kNaN);
+        std::vector<double> vsaEState(std::size(vsaBins) + 1, kNaN);
+        if (estateOk) {
+            try {
+                std::vector<double> volContribs(mol.getNumAtoms());
+                double hContrib = 0.0;
+                getLabuteAtomContribs(mol, volContribs, hContrib, true, false);
+                std::fill(estateVSA.begin(), estateVSA.end(), 0.0);
+                std::fill(vsaEState.begin(), vsaEState.end(), 0.0);
+                for (std::size_t i = 0; i < estateIndices.size(); ++i) {
+                    const double prop = estateIndices[i];
+                    const auto eBin = std::upper_bound(std::begin(estateBins), std::end(estateBins), prop) -
+                                      std::begin(estateBins);
+                    estateVSA[eBin] += volContribs[i];
+                    const auto vBin = std::upper_bound(std::begin(vsaBins), std::end(vsaBins), volContribs[i]) -
+                                      std::begin(vsaBins);
+                    vsaEState[vBin] += prop;
+                }
+            } catch (...) {
+                std::fill(estateVSA.begin(), estateVSA.end(), kNaN);
+                std::fill(vsaEState.begin(), vsaEState.end(), kNaN);
+            }
         }
-    } catch (...) {
-        for (int i = 0; i < 11; ++i) {
-            descriptors.push_back(kNaN);
+        for (int idx : {0, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8}) {
+            descriptors.push_back(estateVSA[idx]);
+        }
+        for (int idx : {0, 9, 1, 2, 3, 4, 5, 6, 7, 8}) {
+            descriptors.push_back(vsaEState[idx]);
         }
     }
-    
-    // 95-104: VSA_EState1-10 - Use exported calcVSA_EState from Osmordred
-    // Python order: 1, 10, 2, 3, 4, 5, 6, 7, 8, 9
-    // C++ indices:  0,  9, 1, 2, 3, 4, 5, 6, 7, 8
-    try {
-        std::vector<double> vsaEState = calcVSA_EState(mol);
-        int pythonOrder[10] = {0, 9, 1, 2, 3, 4, 5, 6, 7, 8};
-        for (int i = 0; i < 10; ++i) {
-            int cppIdx = pythonOrder[i];
-            descriptors.push_back(cppIdx < static_cast<int>(vsaEState.size()) ? vsaEState[cppIdx] : kNaN);
-        }
-    } catch (...) {
-        for (int i = 0; i < 10; ++i) {
-            descriptors.push_back(kNaN);
-        }
-    }
-    
     // 105: FractionCSP3
     descriptors.push_back(calcFractionCSP3(mol));
     
