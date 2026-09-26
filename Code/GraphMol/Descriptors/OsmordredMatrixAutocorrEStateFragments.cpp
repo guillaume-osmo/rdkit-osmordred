@@ -1310,6 +1310,113 @@ std::vector<double> calcChipath(const ROMol &mol) {
   return results;
 }
 
+namespace {
+// Visits the connected subgraphs of 1..maxLen bonds (hydrogens excluded) in
+// exactly the order findAllSubgraphsOfLengthsMtoN(mol, 1, maxLen, false)
+// stores them, per length, but without materialising them: the neighbour
+// lists, the candidate stacks and the forbidden-bond bookkeeping of RDKit's
+// recurseWalkRange are reproduced with reusable buffers instead of copies.
+template <typename Visitor>
+class SubgraphWalker {
+ public:
+  SubgraphWalker(const ROMol &mol, unsigned int maxLen, Visitor &visitor)
+      : d_maxLen(maxLen),
+        d_visitor(visitor),
+        d_nbrs(mol.getNumBonds()),
+        d_forbidden(mol.getNumBonds(), 0),
+        d_cands(maxLen + 1) {
+    // Same content and order as Subgraphs::getNbrsList(mol, false, ...)
+    std::vector<char> hasNbrList(mol.getNumBonds(), 0);
+    for (const auto atom : mol.atoms()) {
+      if (atom->getAtomicNum() == 1) {
+        continue;
+      }
+      for (const auto bond1 : mol.atomBonds(atom)) {
+        if (bond1->getOtherAtom(atom)->getAtomicNum() == 1) {
+          continue;
+        }
+        const int bid1 = bond1->getIdx();
+        hasNbrList[bid1] = 1;
+        for (const auto bond2 : mol.atomBonds(atom)) {
+          const int bid2 = bond2->getIdx();
+          if (bid1 != bid2 && bond2->getOtherAtom(atom)->getAtomicNum() != 1) {
+            d_nbrs[bid1].push_back(bid2);
+          }
+        }
+      }
+    }
+    for (unsigned int bid = 0; bid < mol.getNumBonds(); ++bid) {
+      if (hasNbrList[bid]) {
+        d_roots.push_back(bid);
+      }
+    }
+    d_path.reserve(maxLen);
+  }
+
+  void run() {
+    if (d_maxLen == 0) {
+      return;
+    }
+    for (int root : d_roots) {
+      if (d_forbidden[root]) {
+        continue;
+      }
+      // roots stay forbidden for all later subgraphs
+      d_forbidden[root] = 1;
+      d_path.assign(1, root);
+      d_cands[1] = d_nbrs[root];
+      walk();
+    }
+  }
+
+ private:
+  void walk() {
+    d_visitor(d_path);
+    const unsigned int depth = d_path.size();
+    if (depth >= d_maxLen) {
+      return;
+    }
+    // RDKit passes the forbidden set by value: bonds forbidden at this level
+    // are released when the level returns.
+    std::vector<int> &cands = d_cands[depth];
+    const size_t undoStart = d_undo.size();
+    while (!cands.empty()) {
+      const int next = cands.back();
+      cands.pop_back();
+      if (d_forbidden[next]) {
+        continue;
+      }
+      d_forbidden[next] = 1;
+      d_undo.push_back(next);
+
+      std::vector<int> &childCands = d_cands[depth + 1];
+      childCands.assign(cands.begin(), cands.end());
+      for (int bid : d_nbrs[next]) {
+        if (!d_forbidden[bid]) {
+          childCands.push_back(bid);
+        }
+      }
+      d_path.push_back(next);
+      walk();
+      d_path.pop_back();
+    }
+    for (size_t i = undoStart; i < d_undo.size(); ++i) {
+      d_forbidden[d_undo[i]] = 0;
+    }
+    d_undo.resize(undoStart);
+  }
+
+  const unsigned int d_maxLen;
+  Visitor &d_visitor;
+  std::vector<std::vector<int>> d_nbrs;
+  std::vector<int> d_roots;
+  std::vector<char> d_forbidden;
+  std::vector<std::vector<int>> d_cands;
+  std::vector<int> d_path;
+  std::vector<int> d_undo;
+};
+}  // namespace
+
 std::vector<double> calcAllChiDescriptors(const ROMol &mol) {
   std::vector<double> results(56,
                               0.0);  // Full results vector for all descriptors
@@ -1339,46 +1446,46 @@ std::vector<double> calcAllChiDescriptors(const ROMol &mol) {
   results[40] = path_0_xdv;                      // Total Xp-0dv
   results[48] = path_0_xdv / mol.getNumAtoms();  // Average Xp-0dv
 
-  // One enumeration of all subgraphs of 1..7 bonds; per length it yields the
-  // same subgraphs in the same order as findAllSubgraphsOfLengthN.
-  auto subgraphsByOrder = findAllSubgraphsOfLengthsMtoN(mol, 1, 7, false);
+  // One walk over all subgraphs of 1..7 bonds; per length it visits the same
+  // subgraphs in the same order as findAllSubgraphsOfLengthN, so every sum is
+  // accumulated in the original order.
+  std::vector<double> chain_xd(8, 0.0), chain_xdv(8, 0.0);
+  std::vector<double> cluster_xd(8, 0.0), cluster_xdv(8, 0.0);
+  std::vector<double> pathcluster_xd(8, 0.0), pathcluster_xdv(8, 0.0);
   std::vector<int> degreeScratch(mol.getNumAtoms(), 0);
   std::vector<int> nodes;
+  auto accumulate = [&](const std::vector<int> &bonds) {
+    const unsigned int order = bonds.size();
+    const ChiType type = classifyBondSubgraph(mol, bonds, degreeScratch, nodes);
+    double *xd = nullptr, *xdv = nullptr;
+    if (type == ChiType::Chain && order >= 3 && order <= 7) {
+      xd = &chain_xd[order];
+      xdv = &chain_xdv[order];
+    } else if (type == ChiType::Cluster && order >= 3 && order <= 6) {
+      xd = &cluster_xd[order];
+      xdv = &cluster_xdv[order];
+    } else if (type == ChiType::PathCluster && order >= 4 && order <= 6) {
+      xd = &pathcluster_xd[order];
+      xdv = &pathcluster_xdv[order];
+    } else if (type == ChiType::Path) {
+      path_node_counts[order] += 1;
+      xd = &path_xd[order];
+      xdv = &path_xdv[order];
+    } else {
+      return;
+    }
+    double cd = 1.0, cdv = 1.0;
+    for (const auto node : nodes) {
+      cd *= sigmaElectrons[node];     // d
+      cdv *= valenceElectrons[node];  // dv
+    }
+    *xd += 1.0 / std::sqrt(cd);
+    *xdv += 1.0 / std::sqrt(cdv);
+  };
+  SubgraphWalker<decltype(accumulate)> walker(mol, 7, accumulate);
+  walker.run();
 
   for (int order = 1; order <= 7; ++order) {
-    double chain_xd = 0.0, chain_xdv = 0.0;
-    double cluster_xd = 0.0, cluster_xdv = 0.0;
-    double pathcluster_xd = 0.0, pathcluster_xdv = 0.0;
-
-    for (const auto &bonds : subgraphsByOrder[order]) {
-      const ChiType type =
-          classifyBondSubgraph(mol, bonds, degreeScratch, nodes);
-      double *xd = nullptr, *xdv = nullptr;
-      if (type == ChiType::Chain && order >= 3 && order <= 7) {
-        xd = &chain_xd;
-        xdv = &chain_xdv;
-      } else if (type == ChiType::Cluster && order >= 3 && order <= 6) {
-        xd = &cluster_xd;
-        xdv = &cluster_xdv;
-      } else if (type == ChiType::PathCluster && order >= 4 && order <= 6) {
-        xd = &pathcluster_xd;
-        xdv = &pathcluster_xdv;
-      } else if (type == ChiType::Path) {
-        path_node_counts[order] += 1;
-        xd = &path_xd[order];
-        xdv = &path_xdv[order];
-      } else {
-        continue;
-      }
-      double cd = 1.0, cdv = 1.0;
-      for (const auto node : nodes) {
-        cd *= sigmaElectrons[node];      // d
-        cdv *= valenceElectrons[node];   // dv
-      }
-      *xd += 1.0 / std::sqrt(cd);
-      *xdv += 1.0 / std::sqrt(cdv);
-    }
-
     // Update total Path values
     if (order <= 7) {
       path_xd_total += path_xd[order];
@@ -1387,20 +1494,20 @@ std::vector<double> calcAllChiDescriptors(const ROMol &mol) {
 
     // Store Chain results (order 3-7)
     if (order >= 3 && order <= 7) {
-      results[order - 3] = chain_xd;
-      results[5 + (order - 3)] = chain_xdv;
+      results[order - 3] = chain_xd[order];
+      results[5 + (order - 3)] = chain_xdv[order];
     }
 
     // Store Cluster results (order 3-6)
     if (order >= 3 && order <= 6) {
-      results[10 + (order - 3)] = cluster_xd;
-      results[14 + (order - 3)] = cluster_xdv;
+      results[10 + (order - 3)] = cluster_xd[order];
+      results[14 + (order - 3)] = cluster_xdv[order];
     }
 
     // Store PathCluster results (order 4-6)
     if (order >= 4 && order <= 6) {
-      results[18 + (order - 4)] = pathcluster_xd;
-      results[21 + (order - 4)] = pathcluster_xdv;
+      results[18 + (order - 4)] = pathcluster_xd[order];
+      results[21 + (order - 4)] = pathcluster_xdv[order];
     }
   }
 
