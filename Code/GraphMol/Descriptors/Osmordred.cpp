@@ -180,8 +180,8 @@ std::vector<double> calcOsmordred(const ROMol &mol, const OsmordredOptions &opts
   append(calcWeight(ctx));      // addNames("Weight", 2);
   appendInt(calcWienerIndex(mol));        // addNames("WienerIndex", 2);
   append(calcZagrebIndex(mol));           // addNames("ZagrebIndex", 4);
-  append1(calcPol(mol));                   // addNames("Pol", 1);
-  append1(calcMR(mol));                    // addNames("MR", 1);
+  append1(calcPol(ctx));                   // addNames("Pol", 1);
+  append1(calcMR(ctx));                    // addNames("MR", 1);
   append1(calcFlexibility(mol));           // addNames("Flexibility", 1);
   append1(calcSchultz(mol));               // addNames("Schultz", 1);
   append(calcAlphaKappaShapeIndex(mol));  // addNames("AlphaKappaShapeIndex",

@@ -1617,6 +1617,17 @@ double calcPol(const ROMol &mol) {
   return res;
 }
 
+double calcPol(OsmordredContext &ctx) {
+  if (!ctx.pol) {
+    ctx.pol = calcPol(ctx.mol());
+  }
+  return *ctx.pol;
+}
+
+double calcMR(OsmordredContext &ctx) {
+  return 4. / 3. * M_PI * calcPol(ctx);
+}
+
 double calcMR(const ROMol &mol) {
   return 4. / 3. * M_PI * calcPol(mol);
 }

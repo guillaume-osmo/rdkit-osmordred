@@ -45,6 +45,9 @@ class OsmordredContext {
   std::optional<unsigned int> numHBA;
   std::optional<unsigned int> numHBD;
 
+  //! calcPol(mol), also the basis of calcMR; filled on first use
+  std::optional<double> pol;
+
  private:
   const ROMol &d_mol;
   std::unique_ptr<ROMol> d_molWithHs;
@@ -66,6 +69,8 @@ std::vector<double> calcAutoCorrelation(OsmordredContext &ctx);
 double calcFramework(OsmordredContext &ctx);
 std::vector<double> calcEStateDescs(OsmordredContext &ctx, bool extended);
 std::vector<double> calcHydrogenBond(OsmordredContext &ctx);
+double calcPol(OsmordredContext &ctx);
+double calcMR(OsmordredContext &ctx);
 std::vector<double> calcBEStateDescs(OsmordredContext &ctx);
 template <class T>
 double InfoEntropy(const std::vector<T> &data) {
